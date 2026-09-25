@@ -1,8 +1,10 @@
 
-#include <stdio.h>
+#include "gpio.h"
 
 int main(void)
 {
-    printf("Game Girl :D\n");
+    enable_GPIO_clocks();
+    set_GPIO_pins();
+
     return 0;
 }
