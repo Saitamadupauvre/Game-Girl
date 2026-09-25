@@ -2,7 +2,6 @@
 #ifndef STM32U575_REGS_H
     #define STM32U575_REGS_H
 
-    #include <stdint.h>
 
 #define MMIO32(addr) (*(volatile uint32_t *)(uintptr_t)(addr))
 
@@ -11,6 +10,9 @@
 #define RCC_BASE_NS 0x46020C00UL    // STM32 MANUAL page 145
 #define RCC_AHB2ENR1_OFFSET 0x0000008CUL    // STM32 MANUAL page 556 
 #define RCC_AHB2ENR1 MMIO32(RCC_BASE_NS + RCC_AHB2ENR1_OFFSET)  // TO FIND THE REG ADDRES FOR RCC_AHB2ENR1
+
+#define RCC_APB1ENR1_OFFSET 0x0000009CUL    // STM32 MANUAL PAGE 562
+#define RCC_APB1ENR1 MMIO32(RCC_BASE_NS + RCC_APB1ENR1_OFFSET) // Address for RCC_APB1ENR1
 
 // RCC_AHB2ENR1 bits
 
@@ -24,6 +26,10 @@
 #define RCC_AHB2ENR1_GPIOHEN        (1UL << 7)
 #define RCC_AHB2ENR1_GPIOIEN        (1UL << 8)
 #define RCC_AHB2ENR1_GPIOJEN        (1UL << 9)
+
+// RCC_APB1ENR1 bits
+
+#define RCC_APB1ENR1_TIM2EN         (1UL << 0)
 
 // GPIOF
 
@@ -81,6 +87,6 @@
 #define GPIO_PULL_DOWN(pin)         (2UL << GPIO_2BIT_SHIFT(pin))
 
 /* IDR uses one bit per pin. */
-#define GPIO_PIN_BIT(pin)           (1UL << (uint32_t)(pin))
+#define GPIO_IDR_PIN_BIT(pin)           (1UL << (uint32_t)(pin))
 
 #endif
