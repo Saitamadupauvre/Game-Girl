@@ -31,6 +31,28 @@
 
 #define RCC_APB1ENR1_TIM2EN         (1UL << 0)
 
+// TIM2
+
+#define TIM2_BASE_NS                0x40000000UL
+
+#define TIM_CR1_OFFSET              0x00000000UL
+#define TIM_SR_OFFSET               0x00000010UL
+#define TIM_EGR_OFFSET              0x00000014UL
+#define TIM_CNT_OFFSET              0x00000024UL
+#define TIM_PSC_OFFSET              0x00000028UL
+#define TIM_ARR_OFFSET              0x0000002CUL
+
+#define TIM2_CR1                    MMIO32(TIM2_BASE_NS + TIM_CR1_OFFSET)
+#define TIM2_SR                     MMIO32(TIM2_BASE_NS + TIM_SR_OFFSET)
+#define TIM2_EGR                    MMIO32(TIM2_BASE_NS + TIM_EGR_OFFSET)
+#define TIM2_CNT                    MMIO32(TIM2_BASE_NS + TIM_CNT_OFFSET)
+#define TIM2_PSC                    MMIO32(TIM2_BASE_NS + TIM_PSC_OFFSET)
+#define TIM2_ARR                    MMIO32(TIM2_BASE_NS + TIM_ARR_OFFSET)
+
+#define TIM_CR1_CEN                 (1UL << 0)
+#define TIM_SR_UIF                  (1UL << 0)
+#define TIM_EGR_UG                  (1UL << 0)
+
 // GPIOF
 
 #define GPIOF_BASE_NS 0x42021400UL  // STM32 MANUAL page 147
