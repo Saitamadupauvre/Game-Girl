@@ -4,6 +4,9 @@
 
     #include <stdint.h>
 
+    #define INPUT_DEBOUNCE_SAMPLES 5u
+
+
 typedef enum {
     BTN_A      = 1u << 0,
     BTN_B      = 1u << 1,
@@ -30,7 +33,7 @@ typedef struct {
     uint16_t pressed;
     uint16_t released;
 
-    uint16_t debounce_history[5];
+    uint16_t debounce_history[INPUT_DEBOUNCE_SAMPLES];
     uint8_t debounce_index;
 } input_state_t;
 

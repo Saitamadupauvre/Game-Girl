@@ -2,8 +2,8 @@
 #include "inputs.h"
 
 
-#define INPUT_DEBOUNCE_SAMPLES 5u
 #define INPUT_BUTTON_MASK      0x0FFFu
+
 
 void update_input_state(input_state_t *inputs)
 {
