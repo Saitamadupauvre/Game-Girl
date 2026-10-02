@@ -28,3 +28,7 @@ endif()
 if(GAMEGIRL_BUILD_MCU)
     add_subdirectory(mcu)
 endif()
+
+if(BUILD_TESTING)
+    add_subdirectory(mcu/tests)
+endif()
