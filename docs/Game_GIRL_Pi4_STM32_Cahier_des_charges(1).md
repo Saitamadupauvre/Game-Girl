@@ -650,12 +650,10 @@ Final size depends on enclosure geometry.
 
 # 13. LEDs
 
-Possible LEDs:
+Two status LEDs:
 
-- power;
-- charging;
-- low battery;
-- status/debug.
+- green: charging;
+- red: low battery, blinking when critical.
 
 LEDs are controlled by STM32 GPIO or PWM.
 

@@ -54,7 +54,7 @@ Acceptance: a shutdown is requested only after the configured hold duration or a
 
 ### LED policies
 
-- [ ] Define abstract LED states for power, charging, low battery, and debug status.
+- [ ] Define abstract states for two LEDs: green charging, red low battery (blinking when critical).
 - [ ] Unit-test policy decisions from simulated system events.
 
 Acceptance: services produce output commands without directly accessing GPIO or PWM registers.
