@@ -45,7 +45,7 @@ counter clock = TIM2CLK / (PSC + 1)
               = 1,000,000 Hz
 ```
 
-The counter therefore advances once every 1 microsecond. In up-counting mode, an update event occurs after `ARR + 1` counts:
+The counter therefore advances once every 1 µs. In up-counting mode, an update event occurs after `ARR + 1` counts:
 
 ```text
 update period = (PSC + 1) * (ARR + 1) / TIM2CLK
@@ -55,7 +55,7 @@ update period = (PSC + 1) * (ARR + 1) / TIM2CLK
 
 `timer_event_elapsed()` consequently returns `true` at most once per **1 ms timer update**, provided it is called frequently enough to observe `UIF`.
 
-`PSC = 3` with `ARR = 999` is not a 1 microsecond period. A 1 microsecond update period at a 4 MHz TIM2 clock would require `PSC = 3` and `ARR = 0`.
+`PSC = 3` with `ARR = 999` is not a 1 µs period. A 1 µs update period at a 4 MHz TIM2 clock would require `PSC = 3` and `ARR = 0`.
 
 ## Register Sequence
 
