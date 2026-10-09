@@ -25,7 +25,7 @@ void enable_hardware_timer_clocks(void)
 
 bool timer_event_elapsed(void)
 {
-    if ((TIM2_SR & TIM_SR_UIF) == 0) { return false; }    // Havent reached ARR value so timer it hasnt been 1 micro sec.
+    if ((TIM2_SR & TIM_SR_UIF) == 0) { return false; }    // Havent reached ARR value so timer it hasnt been 1 ms.
 
     TIM2_SR &= ~ TIM_SR_UIF;    // ARR value reached so we clear the bit which puts us back a counter = 0 for our nrext event.
 

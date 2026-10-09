@@ -53,8 +53,7 @@ Game-Girl/
 │   │   ├── buttons.h
 │   │   ├── battery.h
 │   │   ├── power.h
-│   │   ├── led.h
-│   │   └── rumble.h
+│   │   └── led.h
 │   ├── drivers/
 │   │   ├── clock.c
 │   │   ├── gpio.c
@@ -70,7 +69,6 @@ Game-Girl/
 │   │   ├── battery.c
 │   │   ├── power.c
 │   │   ├── led.c
-│   │   ├── rumble.c
 │   │   └── protocol.c
 │   ├── src/
 │   │   └── main.c
