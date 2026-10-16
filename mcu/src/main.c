@@ -2,20 +2,28 @@
 #include "gpio.h"
 #include "inputs.h"
 #include "timer.h"
+#include "timer_api.h"
+#include "usb.h"
 
 
 int main(void)
 {
-    enable_GPIO_clocks();
-    set_GPIO_pins();
-    enable_hardware_timer_clocks();
+    init_GPIO();
+    init_timer();
+    init_usb();
 
     input_state_t inputs = {0};
 
+    deadline_t input_timer = {0};
+
+    timer_start(&input_timer, INPUT_UPDATE_PERIOD_MS);
+
     for (;;) {
-        if (timer_event_elapsed()) {
+        if (timer_expired(&input_timer)) {
             read_GPIO_input_pins(&inputs);
             update_input_state(&inputs);
+
+            timer_start(&input_timer, INPUT_UPDATE_PERIOD_MS);
         }
     }
 

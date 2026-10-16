@@ -14,6 +14,12 @@
 #define RCC_APB1ENR1_OFFSET 0x0000009CUL    // STM32 MANUAL PAGE 562
 #define RCC_APB1ENR1 MMIO32(RCC_BASE_NS + RCC_APB1ENR1_OFFSET) // Address for RCC_APB1ENR1
 
+
+#define RCC_CR_OFFSET 0x00000000UL // RCC Control clock register 11.8.1 in manual
+#define RCC_CR MMIO32(RCC_BASE_NS + RCC_CR_OFFSET)
+
+#define OTG_FS_BASE_NS 0x42040000UL // STM32 MANUAL page 146
+
 // RCC_AHB2ENR1 bits
 
 #define RCC_AHB2ENR1_GPIOAEN        (1UL << 0)
@@ -74,6 +80,40 @@
 #define GPIOE_IDR MMIO32(GPIOE_BASE_NS + GPIO_IDR_OFFSET)
 
 
+// USB OTG_FS
+
+#define RCC_AHB2ENR1_OTGEN (1UL << 14) 
+
+#define OTG_GUSBCFG_OFFSET  0x0000000CUL 
+
+#define OTG_GUSBCFG MMIO32(OTG_FS_BASE_NS + OTG_GUSBCFG_OFFSET)
+
+#define OTG_GUSBCFG_FDMOD    (1UL << 30)
+#define OTG_GUSBCFG_FHMOD    (1UL << 29)
+
+#define OTG_GRSTCTL_OFFSET 0x0000010UL     // STM32 RM0456 Manual 72.15.5 OTG reset register (OTG_GRSTCTL)
+#define OTG_GRSTCTL MMIO32(OTG_FS_BASE_NS + OTG_GRSTCTL_OFFSET)
+
+#define OTG_GRSTCTL_AHBIDL (1UL << 31)
+#define OTG_GRSTCTL_TXFFLSH (1UL << 5)
+#define OTG_GRSTCTL_RXFFLSH (1UL << 4)
+#define OTG_GRSTCTL_CSRST (1UL << 0)
+
+#define OTG_GRSTCTL_TXFNUM_Pos  6U
+#define OTG_GRSTCTL_TXFNUM_Msk  (0x1FUL << OTG_GRSTCTL_TXFNUM_Pos)
+
+#define OTG_GRXFSIZ_RXFD_Pos    0u
+#define OTG_GRXFSIZ_RXFD_Msk    0x0000FFFFUL
+
+#define OTG_GRXFSIZ_OFFSET  0x00000024UL
+#define OTG_GRXFSIZ     MMIO32(OTG_FS_BASE_NS + OTG_GRXFSIZ_OFFSET)
+
+// RCC_CR
+
+#define RCC_CR_HSI48ON (1UL << 12)
+#define RCC_CR_HSI48RDY (1UL << 13)
+
+
 /*
  * Generic GPIO bit-field helpers
  *
@@ -110,5 +150,6 @@
 
 /* IDR uses one bit per pin. */
 #define GPIO_IDR_PIN_BIT(pin)           (1UL << (uint32_t)(pin))
+
 
 #endif
