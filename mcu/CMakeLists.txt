@@ -4,7 +4,9 @@ add_library(gamegirl-firmware-objects OBJECT
     src/main.c
     src/drivers/gpio.c
     src/drivers/timer.c
+    src/common/timer_api.c
     src/services/inputs.c
+    src/drivers/usb.c
 )
 
 target_include_directories(gamegirl-firmware-objects PRIVATE include)
