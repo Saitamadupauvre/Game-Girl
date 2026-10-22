@@ -2,9 +2,11 @@
 
 ## Purpose
 
-This is the full bring-up flow for making the STM32U575 enumerate on the Raspberry Pi as a USB HID gamepad (spec §7.1), written as pseudocode. It is a guide for writing `mcu/src/drivers/usb.c`, not code to paste.
+This is the full bring-up flow for making the STM32U575 enumerate on the Raspberry Pi as a USB HID gamepad (spec §7.1), written as pseudocode. It is a guide for writing `mcu/src/drivers/usb.c` and `mcu/src/services/hid.c` (see [Code layout](#code-layout)), not code to paste.
 
 It follows the section order of `usb_TODOS.md`.
+
+`mcu/src/drivers/usb_mock.c` is a complete single-file reference implementation of this guide. It compiles but has never run on hardware, it is not in CMake, and it has known problems (see [References](#references)). Use it to compare against, not to copy.
 
 ### How much to trust each value
 
@@ -16,7 +18,17 @@ Every register, offset and bit below carries one of these marks:
 | ✔ HAL | Checked against ST's U5 HAL / LL source, which is known to work on this chip. |
 | ⚠ RM | Not found in the header or HAL. Confirm it in RM0456 before relying on it. |
 
-The pseudocode uses CMSIS-style names (`OTG.GUSBCFG`, `DIEPCTL(n)`) for readability. Map them onto the `MMIO32(...)` style in `stm32u575_regs.h`.
+The pseudocode uses CMSIS-style names (`OTG.GUSBCFG`, `DIEPCTL(n)`) for readability. Every USB, PWR, GPIOA, RCC and NVIC register used in §3–§9 is already defined in `stm32u575_regs.h` in the `MMIO32(...)` style:
+
+| Guide name | `stm32u575_regs.h` name |
+|---|---|
+| `OTG.GUSBCFG`, `DCTL`, … | `OTG_GUSBCFG`, `OTG_DCTL`, … |
+| `DIEPCTL(n)`, `DOEPTSIZ(n)`, `FIFO(n)`, … | `OTG_DIEPCTL(n)`, `OTG_DOEPTSIZ(n)`, `OTG_FIFO(n)`, … |
+| GINTSTS / GINTMSK bits (`USBRST`, `RXFLVLM`, …) | `OTG_GINTSTS_*`, used for both registers (same bit positions) |
+| DIEPCTL / DOEPCTL bits | `OTG_DEPCTL_*` |
+| DIEPINT / DOEPINT bits | `OTG_DEPINT_XFRC`, `OTG_DIEPINT_TOC`, `OTG_DOEPINT_STUP` |
+
+The `clock_init()` registers in §2 (`FLASH.ACR`, `RCC.ICSCR1`, `PWR.VOSR`) are **not** defined yet.
 
 ---
 
@@ -38,15 +50,85 @@ boot
      └─ usb_hid_send_if_changed()      (non-blocking)
 
 OTG_FS_IRQHandler  (all enumeration happens here)
- ├─ USBRST   → reset endpoints, arm EP0 OUT for SETUP
+ ├─ USBRST   → reset endpoints, hid_reset(), arm EP0 OUT for SETUP
  ├─ ENUMDNE  → EP0 = 64 bytes, set TRDT
  ├─ RXFLVL   → pop RX FIFO (SETUP bytes / OUT data)
- ├─ OEPINT   → STUP: handle the SETUP request
+ ├─ OEPINT   → STUP: hid_handle_setup() decides, usb.c applies the reply
  ├─ IEPINT   → XFRC: IN transfer done (EP0 / EP1)
  └─ USBSUSP / WKUINT → set/clear a suspended flag
 ```
 
 Roles: **Pi = USB host**, **STM32 = USB device**.
+
+### Directions and endpoints
+
+USB names directions from the **host's** point of view, so "OUT" and "receive" mean the same thing on the device:
+
+| USB name | Direction | STM32 registers | FIFO |
+|---|---|---|---|
+| **IN** | device → host (the STM32 transmits) | `DIEPCTL`, `DIEPTSIZ`, `DIEPINT` | one **TX** FIFO per IN endpoint |
+| **OUT** | host → device (the STM32 receives) | `DOEPCTL`, `DOEPTSIZ`, `DOEPINT` | one **RX** FIFO shared by all OUT endpoints |
+
+The gamepad uses two endpoints:
+
+| Endpoint | Type | Halves used | FIFO | Carries |
+|---|---|---|---|---|
+| **EP0** | control | IN and OUT | RX FIFO + TX FIFO 0 | SETUP requests, descriptors, status stages |
+| **EP1 IN** (`0x81`) | interrupt | IN only | TX FIFO 1 | the 2-byte button report |
+
+- **EP0** exists on every USB device and is never listed in the configuration descriptor (`bNumEndpoints = 1` counts EP1 only). It stays in use after enumeration: Linux sends `SET_IDLE`, sometimes `GET_REPORT` or `GET_STATUS`, and re-enumerates after every bus reset.
+- **No EP1 OUT is needed.** HID requires an interrupt IN endpoint, and an interrupt OUT one is optional. It's only used for output reports. If rumble or LEDs (spec §7.2) later need host → device data, the host can send them with `SET_REPORT` on EP0 instead of adding an endpoint.
+
+### Connection timeline
+
+```text
+plug in → D+ pull-up → host resets the bus → ENUMDNE      speed set by hardware, not over EP0
+EP0: GET_DESCRIPTOR(device) → SET_ADDRESS
+     → GET_DESCRIPTOR(configuration, strings, HID report)  the configuration block carries
+                                                          EP1's bInterval and wMaxPacketSize
+     → SET_CONFIGURATION(1)                               device activates EP1 IN here
+     → SET_IDLE
+EP1 IN: host polls every bInterval ms; the device loads a report only when the buttons change
+EP0: keeps answering control requests for as long as the device is connected
+```
+
+The device never starts a transfer on EP0. Every reply there answers a request from the host.
+
+### Code layout
+
+The code is split by layer, the same way `gpio.c` (registers) and `inputs.c` (logic) are:
+
+```text
+mcu/
+├─ include/
+│  ├─ usb.h              init_usb(), usb_hid_send_if_changed(), OTG_FS_IRQHandler(), usb_reply_t
+│  └─ hid.h              hid_report_t, hid_state_t, hid_pack(), hid_reset(), hid_handle_setup()
+├─ src/
+│  ├─ drivers/usb.c      everything that touches OTG_FS registers
+│  └─ services/hid.c     pure logic: no registers, runs on the PC
+└─ tests/test_hid.c      host tests for hid.c
+```
+
+| File | Owns | Sections |
+|---|---|---|
+| `drivers/usb.c` | power, pins, clocks, core and device setup, `OTG_FS_IRQHandler`, the TX/RX FIFO code (as `static` functions), EP0 helpers, EP1 activation and sending | §3–§6, the `usb.c` half of §7, §9 |
+| `services/hid.c` | descriptors, string descriptors, `hid_pack()`, the SETUP request decision (`hid_handle_setup()`) | the `hid.c` half of §7, §8, `hid_pack` in §9 |
+
+The seam between them is the reply type already in `usb.h`:
+
+```c
+typedef enum { USB_REPLY_DATA, USB_REPLY_ZLP, USB_REPLY_STALL } usb_reply_type_t;
+
+typedef struct {
+    usb_reply_type_t type;
+    const uint8_t *data;
+    uint16_t len;
+} usb_reply_t;
+```
+
+`hid.c` decides *what* to answer, and `usb.c` turns the answer into register writes. Most bugs in request handling, descriptor lengths or `wLength` clipping can then be found by host tests before the board arrives. Bugs left on the board are almost always in `usb.c`.
+
+There's no separate `fifo.c`. The FIFO code is about 60 lines, only `usb.c` uses it, and it's tied to the endpoint registers (program `DIEPTSIZ` and `EPENA`, *then* write the FIFO). Split it into `drivers/usb_fifo.c` later only if `usb.c` gets too long to read.
 
 ---
 
@@ -132,8 +214,9 @@ This is why turning HSI48 on (`HSI48ON`) is not enough. That only starts the osc
 | **Interrupt IN endpoint** | Despite the name, the device **cannot** interrupt the host. The host *polls* EP1 every `bInterval` ms (1 ms here). If the TX FIFO holds a report, the core sends it. If not, the core answers NAK on its own. So "sending" a report just means loading it into the FIFO and letting the next poll pick it up. |
 | **`ep1_busy`** | You can't load a second report until the host has taken the first. `XFRC` on EP1 tells you that happened. |
 | **Only send on change** | HID reports describe *state*, not events. If nothing changed, NAKing is correct and saves bus bandwidth. The idle timer covers the case where the host has asked for a periodic resend. |
-| **`volatile` shared flags** | The ISR changes `configured`, `suspended` and `ep1_busy` behind the main loop's back. Without `volatile`, the compiler may keep a stale copy in a register and the loop never sees the change. |
-| **Pure `hid_pack`** | All the logic that doesn't touch registers can be unit-tested on the PC. Bugs left over on the board are then down to hardware and setup, which narrows the debugging. |
+| **`volatile` shared flags** | The ISR changes `configured`, `suspended`, `ep1_busy` and `report_pending` behind the main loop's back. Without `volatile`, the compiler may keep a stale copy in a register and the loop never sees the change. |
+| **Mask the USB IRQ while arming EP1** | `volatile` makes each flag visible, but it doesn't make the *sequence* "set `EPENA`, then write `FIFO(1)`" atomic. A bus reset or `SET_CONFIGURATION` in the middle flushes FIFO 1 or rewrites `DIEPCTL(1)` under the main loop. |
+| **Pure `hid.c`** | All the logic that doesn't touch registers can be unit-tested on the PC. Bugs left over on the board are then down to hardware and setup, which narrows the debugging. |
 
 ---
 
@@ -210,7 +293,10 @@ clock_init():
     // ⚠ RM: check whether to wait for RCC_CR.MSISRDY after the change
 
     update TIM2_INPUT_CLOCK_HZ in timer.c to 24'000'000
-    (PSC becomes 23 for a 1 MHz counter, keeping the 1 ms tick)
+    (TIM2 counts at 1 kHz, so PSC becomes 24'000'000 / 1'000 - 1 = 23'999,
+     which fits the 16-bit prescaler and keeps the 1 ms tick)
+    // Do this in the same change as the clock switch: every USB timeout
+    // is a deadline_t, and at the old PSC they all expire 6× too early.
 ```
 
 > If you ever go **down** in frequency, change the order: lower the clock first, then the wait states.
@@ -237,10 +323,10 @@ usb_pins_init():
     //    PA12 = OTG_FS_DP on AF10 for your package.
 
 usb_clocks_init():
-    RCC.CR |= HSI48ON (bit 12); wait for HSI48RDY (bit 13)   ✔ CMSIS  (already written)
+    RCC.CR |= HSI48ON (bit 12); wait for HSI48RDY (bit 13)   ✔ CMSIS  (in usb.c, needs a timeout)
     RCC.CCIPR1.ICLKSEL (bits 27:26) = 0b00 → HSI48           ✔ CMSIS @ 0xE0, ✔ HAL
         (01 = PLL2Q, 10 = PLL1Q, 11 = MSIK)
-    RCC.AHB2ENR1 |= OTGEN (bit 14)                            ✔ CMSIS  (already written)
+    RCC.AHB2ENR1 |= OTGEN (bit 14)                            ✔ CMSIS  (in usb.c)
 ```
 
 HSI48 is not crystal-accurate. Full speed needs ±0.25%, and the U5 has a CRS peripheral that trims HSI48 against the host's SOF packets. Start without it. If you later see flaky enumeration or CRC errors in `usbmon`, enable CRS with SYNC source = USB SOF. ⚠ RM, CRS chapter.
@@ -268,12 +354,12 @@ usb_core_init():
     force_device_mode():                        // ✔ HAL USB_SetCurrentMode
         GUSBCFG &= ~(FHMOD | FDMOD)             // bits 29, 30
         GUSBCFG |= FDMOD
-        wait until GINTSTS.CMOD (bit 0) == 0    // 0 = device mode
-            HAL polls every 10 ms up to a max; ≥25 ms is the spec figure
-            → use deadline_t, give up after e.g. 50 ms
+        wait USB_WAIT_PERIOD_MS (25 ms)         // HAL waits at least 10 ms before checking
+        GINTSTS.CMOD (bit 0) == 0 ?             // 0 = device mode
+            no → return error
 ```
 
-**Difference from the current `usb.c`:** it forces the mode first and then resets. Follow ST's order: PHYSEL → reset → PWRDWN → mode. You can also poll `CMOD` instead of always waiting a fixed 25 ms.
+**Difference from the current `usb.c`:** it already resets before forcing the mode, but it doesn't set `PHYSEL` before the reset or `PWRDWN` after it. Follow ST's order: PHYSEL → reset → PWRDWN → mode. After the 25 ms wait, check `CMOD` to confirm the core is really in device mode.
 
 ---
 
@@ -314,6 +400,7 @@ usb_device_init():
     GINTSTS = 0xFFFFFFFF                          // clear any pending (write-1-to-clear)
     GINTMSK = USBRST | ENUMDNEM | RXFLVLM | IEPINT | OEPINT | USBSUSPM | WUIM
               // bits 12, 13, 4, 18, 19, 11, 31                 ✔ CMSIS
+              // regs.h: OTG_GINTSTS_USBRST | _ENUMDNE | _RXFLVL | _IEPINT | _OEPINT | _USBSUSP | _WKUINT
     GAHBCFG |= GINTMSK                            // bit 0: global interrupt enable ✔ CMSIS
 
     NVIC enable OTG_FS_IRQn = 73                  ✔ CMSIS
@@ -351,11 +438,13 @@ on_usb_reset():
     for each endpoint n:
         DIEPINT(n) = 0xFB7F;  DIEPCTL(n) &= ~STALL
         DOEPINT(n) = 0xFB7F;  DOEPCTL(n) &= ~STALL;  DOEPCTL(n) |= SNAK
-    DAINTMSK |= (1 << 16) | (1 << 0)             // OUT EP0, IN EP0
+    DAINTMSK  = (1 << 16) | (1 << 0)             // OUT EP0, IN EP0 only: plain `=`
+                                                 // so EP1 stays masked until SET_CONFIGURATION
     DOEPMSK  |= STUPM (bit 3) | XFRCM (bit 0)
     DIEPMSK  |= XFRCM (bit 0) | TOM (bit 3)
     DCFG     &= ~DAD                             // address back to 0
-    usb_state = DEFAULT;  configured = false
+    hid_reset(&hid_state)                        // address 0, configuration 0, idle_rate 0
+    configured = false;  suspended = false;  ep1_busy = false
     ep0_arm_setup()
 ```
 
@@ -406,32 +495,45 @@ on_out_ep_irq():
     pending = DAINT >> 16
     if pending & 1:                               // EP0 OUT
         i = DOEPINT(0)
+        DOEPINT(0) = i                            // w1c every flag that was read
         if i & STUP (bit 3):
-            DOEPINT(0) = STUP
-            handle_setup(setup_pkt)               // section 7
-            ep0_arm_setup()                       // re-arm for the next SETUP
-        if i & XFRC (bit 0):
-            DOEPINT(0) = XFRC                     // OUT status ZLP received
+            ep0_arm_setup()                       // re-arm for the next SETUP FIRST...
+            apply_setup(setup_pkt)                // ...section 7: may re-arm for status OUT
+        // XFRC (bit 0): OUT status ZLP received, nothing else to do
 ```
+
+Re-arm **before** handling the request. A control read ends with `ep0_arm_status_out()`, which rewrites `DOEPTSIZ(0)` and sets `EPENA`. Calling `ep0_arm_setup()` after it would overwrite that while the endpoint is enabled.
 
 ### 6.5 IN endpoint interrupt
 
 ```text
 on_in_ep_irq():
     pending = DAINT & 0xFFFF
-    if pending & (1 << 0):  DIEPINT(0) = XFRC;  ep0_in_done()
-    if pending & (1 << 1):  DIEPINT(1) = XFRC;  ep1_busy = false
+    if pending & (1 << 0):
+        DIEPINT(0) = DIEPINT(0)                   // w1c everything (XFRC, TOC); nothing else to do
+    if pending & (1 << 1):
+        i = DIEPINT(1);  DIEPINT(1) = i
+        if i & XFRC:  ep1_busy = false            // host collected the report
 ```
 
 ### 6.6 Low-level EP0 helpers
 
 ```text
 ep0_send(data, len):                              // len ≤ 64 for everything here
+    if free words in DTXFSTS(0) < ceil(len/4): ep0_stall(); return
     DIEPTSIZ(0) = (1 << 19) | len                 // PKTCNT=1, XFRSIZ=len
     DIEPCTL(0) |= EPENA (31) | CNAK (26)
-    for each 4-byte chunk of data (little-endian, pad last word):
-        FIFO(0) = word
+    txfifo_write(0, data, len)                    // see below
     if len > 0: ep0_arm_status_out()              // host will send an OUT ZLP status
+
+txfifo_write(ep, data, len):                      // shared by EP0 and EP1
+    for each 4-byte chunk of data (little-endian, zero-pad the last word):
+        FIFO(ep) = word
+
+rxfifo_read(dst, dst_size, bcnt):                 // used by on_rx_fifo
+    for each of ceil(bcnt/4) words:
+        word = FIFO(0)                            // every read pops, even if you discard it
+        copy the bytes that fit in dst
 
 ep0_send_zlp():          ep0_send(nothing, 0)     // status stage for no-data requests
 
@@ -444,11 +546,11 @@ ep0_stall():
     (the core clears STALL by itself when the next SETUP arrives)
 ```
 
-Always send `min(wLength, descriptor_length)` bytes. Linux first asks for 8 or 64 bytes of the device descriptor, then asks again for the full length.
+Always send `min(wLength, descriptor_length)` bytes. Linux first asks for 8 or 64 bytes of the device descriptor, then asks again for the full length. `hid_handle_setup()` does that clipping, so `usb.c` sends `reply.len` as is.
 
 ---
 
-## 7. Control requests (`handle_setup`)
+## 7. Control requests (`hid_handle_setup` + `apply_setup`)
 
 SETUP packet layout (USB 2.0 §9.3):
 
@@ -460,45 +562,80 @@ byte 4..5 wIndex   (LE)
 byte 6..7 wLength  (LE)
 ```
 
+### 7.1 `hid.c`: decide the answer (pure, host-testable)
+
+`hid_state_t` holds everything the requests change. `usb.c` owns one instance, and hid.c only reads and writes the copy it's given:
+
+```c
+typedef struct {
+    uint8_t address;         // set by SET_ADDRESS
+    uint8_t configuration;   // 0 or 1, set by SET_CONFIGURATION
+    uint8_t idle_rate;       // set by SET_IDLE, 4 ms units, 0 = never resend
+    uint8_t last_report[2];  // for GET_REPORT, written by the main loop
+} hid_state_t;
+```
+
 ```text
-handle_setup(s):
+hid_reset(state):  address = 0, configuration = 0, idle_rate = 0      // called on USB reset
+
+hid_handle_setup(s[8], state) -> usb_reply_t:
+    DATA(p, n) means { USB_REPLY_DATA, p, min(n, wLength) }
     switch (s.bmRequestType, s.bRequest):
 
     (0x80, GET_DESCRIPTOR=6):
         switch wValue >> 8:
-            1 DEVICE  → ep0_send(dev_desc, min(18, wLength))
-            2 CONFIG  → ep0_send(cfg_desc, min(34, wLength))
-            3 STRING  → index = wValue & 0xFF → ep0_send(str[index]) or stall
-            6 DEVICE_QUALIFIER → ep0_stall()       // correct answer for a FS-only device
-            else      → ep0_stall()
+            1 DEVICE  → DATA(dev_desc, 18)
+            2 CONFIG  → DATA(cfg_desc, 34)
+            3 STRING  → index = wValue & 0xFF
+                        build str[index] into a static buffer in hid.c → DATA(buf, len)
+                        unknown index → STALL
+            6 DEVICE_QUALIFIER → STALL             // correct answer for a FS-only device
+            else      → STALL
 
-    (0x00, SET_ADDRESS=5):
-        DCFG.DAD = wValue & 0x7F                   // write NOW, before the status stage
-        ep0_send_zlp()                             // DWC2 applies it after the status ✔ HAL
-        usb_state = ADDRESS
-
-    (0x00, SET_CONFIGURATION=9):
-        if wValue == 1:  ep1_activate(); configured = true; ep0_send_zlp()
-        elif wValue == 0: configured = false; ep0_send_zlp()
-        else: ep0_stall()
-
-    (0x80, GET_CONFIGURATION=8):  ep0_send([configured ? 1 : 0], 1)
-    (0x80, GET_STATUS=0):         ep0_send([0, 0], 2)    // bus powered, no remote wakeup
-    (0x81, GET_STATUS=0), (0x82, GET_STATUS=0): ep0_send([0, 0], 2)
+    (0x00, SET_ADDRESS=5):        state.address = wValue & 0x7F; ZLP
+    (0x00, SET_CONFIGURATION=9):  wValue ≤ 1 ? (state.configuration = wValue; ZLP) : STALL
+    (0x80, GET_CONFIGURATION=8):  DATA(&state.configuration, 1)
+    (0x80, GET_STATUS=0):         DATA(zeros, 2)    // bus powered, no remote wakeup
+    (0x81, GET_STATUS=0), (0x82, GET_STATUS=0): DATA(zeros, 2)
 
     // --- HID, recipient = interface ---
     (0x81, GET_DESCRIPTOR=6):
-        0x22 REPORT → ep0_send(hid_report_desc, min(29, wLength))
-        0x21 HID    → ep0_send(cfg_desc + 18, 9)
-    (0x21, SET_IDLE=0x0A):        idle_rate = wValue >> 8; ep0_send_zlp()  // Linux sends this
-    (0xA1, GET_REPORT=0x01):      ep0_send(current_report, 2)
-    (0x01, SET_INTERFACE=11):     wValue == 0 ? ep0_send_zlp() : ep0_stall()
+        0x22 REPORT → DATA(hid_report_desc, 29)
+        0x21 HID    → DATA(cfg_desc + 18, 9)
+        else        → STALL
+    (0x21, SET_IDLE=0x0A):        state.idle_rate = wValue >> 8; ZLP    // Linux sends this
+    (0xA1, GET_REPORT=0x01):      DATA(state.last_report, 2)
+    (0x01, SET_INTERFACE=11):     wValue == 0 ? ZLP : STALL
 
-    default: ep0_stall()
+    default: STALL
 ```
+
+`reply.data` must still be valid after `hid_handle_setup()` returns, so it points at `static const` descriptors, a `static` buffer in `hid.c`, or a field of `state`. It must never point at a local array.
+
+### 7.2 `usb.c`: apply the answer
+
+```text
+apply_setup(setup_pkt):                            // called from on_out_ep_irq on STUP
+    old_config = hid_state.configuration
+    reply = hid_handle_setup(setup_pkt, &hid_state)
+
+    DCFG.DAD = hid_state.address                   // write NOW, before the status stage:
+                                                   // DWC2 applies it after the status ✔ HAL
+    if hid_state.configuration != old_config:
+        if hid_state.configuration == 1: ep1_activate();   configured = true
+        else:                            configured = false; ep1_deactivate()
+
+    switch reply.type:
+        USB_REPLY_DATA  → ep0_send(reply.data, reply.len)
+        USB_REPLY_ZLP   → ep0_send_zlp()
+        USB_REPLY_STALL → ep0_stall()
+```
+
+Rewriting `DAD` with the same address on every request is harmless. A repeated `SET_CONFIGURATION(1)` doesn't re-activate EP1, which is fine because Linux sends it once per enumeration.
 
 ```text
 ep1_activate():                                    // interrupt IN, endpoint 0x81
+    flush_tx_fifo(1)                               // drop a report left from an earlier configuration
     DIEPCTL(1) = USBAEP (15)
                | (3 << 18)                         // EPTYP = interrupt
                | (1 << 22)                         // TXFNUM = 1 (uses DIEPTXF1)
@@ -506,6 +643,13 @@ ep1_activate():                                    // interrupt IN, endpoint 0x8
                | SNAK (27)
                | 8                                 // MPSIZ = wMaxPacketSize
     DAINTMSK |= (1 << 1)
+    ep1_busy = false
+    report_pending = true                          // send the current state even if unchanged
+
+ep1_deactivate():                                  // SET_CONFIGURATION(0)
+    if DIEPCTL(1) & EPENA:  DIEPCTL(1) |= EPDIS | SNAK   // abort an armed report
+    DIEPCTL(1) &= ~USBAEP
+    DAINTMSK   &= ~(1 << 1)
     ep1_busy = false
 ```
 
@@ -611,31 +755,89 @@ The spec's enum (Cahier des charges §6.3) has `BTN_MENU`, but `btn_t` has no Me
 ## 9. Sending reports (main loop, non-blocking)
 
 ```text
-// pure — host-testable, no registers
+// hid.c — pure, host-testable, no registers
 hid_pack(uint16 current) -> hid_report_t:
     return { btn_low = current & 0xFF, btn_high = (current >> 8) & 0x0F }
 
+// usb.c
 usb_hid_send_if_changed(inputs):                  // called every main-loop pass
-    if !configured or suspended:      return
-    report = hid_pack(inputs.current)
-    if report == last_sent and !timer_expired(&idle_deadline): return
-    if ep1_busy:                      return      // previous report still in flight
-    if (DTXFSTS(1) & 0xFFFF) < 1:     return      // INEPTFSAV: free words in TX FIFO ✔ CMSIS
+    if inputs == NULL or !configured or suspended or ep1_busy: return
 
+    report   = hid_pack(inputs.current)
+    changed  = report != last_sent
+    rate     = hid_state.idle_rate
+    idle_due = rate != 0 and timer_expired(&idle_deadline)   // rate 0 = never resend
+    if !changed and !idle_due and !report_pending: return
+    if (DTXFSTS(1) & 0xFFFF) < 1: return          // INEPTFSAV: free words in TX FIFO ✔ CMSIS
+
+    NVIC_ICER2 = 1 << 9                           // mask OTG_FS IRQ (ICER2 @ 0xE000E188, ✔ Arm)
     ep1_busy = true                               // set BEFORE enabling (ISR clears it)
     DIEPTSIZ(1) = (1 << 19) | 2                   // 1 packet, 2 bytes
     DIEPCTL(1) |= EPENA | CNAK
     FIFO(1)     = report.btn_low | (report.btn_high << 8)
-    last_sent = report;  timer_start(&idle_deadline, IDLE_MS)
+    NVIC_ISER2 = 1 << 9                           // unmask
+
+    last_sent = report;  report_pending = false
+    hid_state.last_report = { report.btn_low, report.btn_high }   // for GET_REPORT
+    if rate != 0: timer_start(&idle_deadline, rate * 4)           // SET_IDLE unit = 4 ms
 ```
 
-Concurrency: `configured`, `suspended` and `ep1_busy` are written in the ISR and read in the main loop, so make them `volatile`. The main loop only touches `FIFO(1)` and the ISR only touches `FIFO(0)`. Separate FIFOs don't conflict.
+Two things the simple version gets wrong:
 
-Unit tests for `hid_pack`, to add to `mcu/tests/`:
+- **`idle_rate = 0` means "never resend"**, and Linux sends exactly that. A plain "unchanged and the timer hasn't expired" test treats a never-started timer as expired, and resends the same report on every poll.
+- **After (re)configuration, the current state must go out once** even if it equals `last_sent`. If a button is held through a host reset, `last_sent` still matches and the host would never learn about it. `report_pending` covers that.
+
+`NVIC_ICER2` isn't in `stm32u575_regs.h` yet. Add it next to `NVIC_ISER2`.
+
+### EP1 transfer cycle
+
+Two different bits in `DIEPCTL(1)` control EP1:
+
+| Bit | Meaning | Set by | Cleared by |
+|---|---|---|---|
+| `USBAEP` (15) | EP1 exists and is active | software, once, at `SET_CONFIGURATION(1)` | software, only on bus reset or `SET_CONFIGURATION(0)` |
+| `EPENA` (31) | a transfer is armed for the next poll | software, **for each report** | **the core**, when the host has collected the report |
+
+You never disable EP1 between reports, because the core clears `EPENA` by itself. `EPDIS` (30) only aborts a transfer that is still armed, for example during reset. It's not used in normal operation.
+
+Software never pops the TX FIFO either. Popping only happens on the RX side (`GRXSTSP`, `FIFO(0)`). The core empties TX FIFO 1 when it sends the packet.
+
+```text
+EP1 idle (EPENA = 0)   → host polls → core answers NAK by itself
+buttons changed        → software: ep1_busy = true, DIEPTSIZ(1), EPENA | CNAK, write FIFO(1)
+host polls             → core sends the report, empties the FIFO, clears EPENA, raises XFRC
+ISR sees XFRC on EP1   → software: ep1_busy = false
+EP1 idle again         → NAK on every poll until the buttons change
+```
+
+"Busy" means a report is armed and the host hasn't collected it yet. While it's busy, don't load a new one. `ep1_busy` is the software copy of that state.
+
+### Concurrency
+
+- **`volatile`:** `configured`, `suspended`, `ep1_busy` and `report_pending` are written in the ISR and read in the main loop, so make them `volatile`.
+- **FIFOs:** in normal operation the main loop only writes `FIFO(1)` and the ISR only touches `FIFO(0)`. Separate FIFOs don't conflict.
+- **The exception:** the ISR's reset handler and `ep1_activate()` also flush FIFO 1 and rewrite `DIEPCTL(1)`. That's why the arm-and-write sequence above masks the USB IRQ.
+- **`hid_state.last_report`:** the main loop writes it and `GET_REPORT` in the ISR reads it. A torn 2-byte read only affects that one rare request, so it doesn't need protecting.
+
+### Host tests (`mcu/tests/test_hid.c`)
+
+`hid_pack`:
 - every single button maps to the right bit
 - no buttons pressed gives `{0, 0}`
 - all buttons pressed gives `{0xFF, 0x0F}`
 - bits 12–15 of `current` never leak into the padding
+
+`hid_handle_setup`:
+- `GET_DESCRIPTOR(device)` with `wLength` 8, 18 and 64 gives `DATA` of length 8, 18 and 18
+- `GET_DESCRIPTOR(configuration)` gives 34 bytes, and `wTotalLength` inside it equals 34
+- `GET_DESCRIPTOR(string 0)` gives `04 03 09 04`, string 2 is valid UTF-16LE with the right `bLength`, and an unknown index gives `STALL`
+- `GET_DESCRIPTOR(device qualifier)` gives `STALL`
+- HID `GET_DESCRIPTOR(report)` gives 29 bytes, and the HID descriptor's `wDescriptorLength` equals 29
+- `SET_ADDRESS(5)` gives `ZLP` and `state.address == 5`
+- `SET_CONFIGURATION(1)` / `(0)` give `ZLP` and update `state.configuration`, and `SET_CONFIGURATION(2)` gives `STALL`
+- `SET_IDLE` stores `wValue >> 8`
+- an unknown request gives `STALL`
+- `hid_reset` clears address, configuration and idle rate
 
 ---
 
@@ -688,6 +890,14 @@ Common failures, roughly in order of likelihood:
     <https://github.com/STMicroelectronics/stm32u5xx-hal-driver/blob/main/Inc/stm32u5xx_hal_gpio_ex.h>
 - **ST USB device middleware**, a reference for the descriptor and request flow (HID class included).
   <https://github.com/STMicroelectronics/stm32-mw-usb-device>
+
+### In this repo
+
+- **`mcu/src/drivers/usb_mock.c`**: the whole guide as one file. It compiles with `-Wall -Wextra -Werror -Wconversion` for the Cortex-M33, but it has never run, isn't in CMake, and defines `init_usb()` just like `usb.c`. It predates the `usb.c`/`hid.c` split and has these known problems, all fixed in the pseudocode above:
+  - The TIM2 timeouts expire 6× too early once HCLK is 24 MHz, unless `TIM2_INPUT_CLOCK_HZ` changes with it (§2).
+  - `ep1_activate()` doesn't flush TX FIFO 1 (§7.2).
+  - Arming EP1 from the main loop isn't protected against the ISR (§9).
+  - `init_usb()` returns `void`, so a start-up timeout leaves the device disconnected with nothing reported.
 
 ### Other DWC2 drivers (same Synopsys core, independent code)
 

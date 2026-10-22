@@ -120,7 +120,6 @@ Responsibilities:
 - handle power button;
 - generate low-battery alerts;
 - control LEDs;
-- control rumble;
 - coordinate safe shutdown;
 - provide firmware-version and hardware-status information.
 
@@ -650,27 +649,7 @@ Final size depends on enclosure geometry.
 
 ---
 
-# 13. Rumble
-
-Optional V1 feature.
-
-Architecture:
-
-```text
-STM32 GPIO
-    │
-    ▼
-MOSFET driver
-    │
-    ▼
-vibration motor
-```
-
-The motor must never be driven directly from an STM32 GPIO.
-
----
-
-# 14. LEDs
+# 13. LEDs
 
 Possible LEDs:
 
