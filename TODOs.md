@@ -12,11 +12,12 @@ Host tests `gamegirl-input-tests` and `gamegirl-timer-tests` pass.
 
 ## USB bring-up
 
-- [ ] Set `PWR_SVMCR.USV` (and enable the PWR clock first). On the U5, the USB supply stays isolated until this bit is set.
-- [ ] Configure PA11/PA12 (USB D-/D+) for the alternate function.
-- [ ] Do the core soft reset (`CSRST`) before forcing device mode (`FDMOD`), matching ST's usual init order.
-- [ ] Replace the 25 ms spin in `setup_OTG_FS_mode()` with a non-blocking USB state machine, as `docs/mcu/timer-layers.md` requires, or document it as an accepted boot-time exception.
-- [ ] Implement FIFO sizing (`GRXFSIZ`, TX FIFOs), device configuration, enumeration and descriptors.
+- [x] Set `PWR_SVMCR.USV` (and enable the PWR clock first). On the U5, the USB supply stays isolated until this bit is set.
+- [x] Configure PA11/PA12 (USB D-/D+) for the alternate function.
+- [x] Do the core soft reset (`CSRST`) before forcing device mode (`FDMOD`), matching ST's usual init order.
+- [ ] Replace the 25 ms spin in `enable_usb_cores()` with a non-blocking USB state machine, as `docs/mcu/timer-layers.md` requires, or document it as an accepted boot-time exception.
+- [x] VBUS sensing on PA9 (`GCCFG.VBDEN`), `SDIS`, `PCGCCTL` and `DCFG` in `init_usb_device()`. The board must wire VBUS to PA9.
+- [ ] Implement FIFO sizing (`GRXFSIZ`, TX FIFOs), the rest of the device configuration, enumeration and descriptors.
 - [ ] Use `hid_report_t` (`mcu/include/hid.h`): convert `input_state_t.current` into a report, add the HID report descriptor, and unit-test report packing for every button.
 
 ## Clock tree
