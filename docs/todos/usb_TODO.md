@@ -26,7 +26,7 @@ This replaces `usb_TODOS.md` at the repository root.
 
 ## 1. Clock (§2): blocks USB on the board
 
-- [ ] Add a clock module with `clock_init()`: MSIS range 1 → 24 MHz, flash wait states raised **before** the clock goes up.
+- [x] Add a clock module with `clock_init()`: MSIS range 1 → 24 MHz, flash wait states raised **before** the clock goes up.
 - [ ] Add the `FLASH_ACR`, `RCC_ICSCR1` and `PWR_VOSR` definitions to `stm32u575_regs.h`.
 - [ ] Check in RM0456 whether USB works in VOS range 4. If not, raise VOS first.
 - [ ] Change `TIM2_INPUT_CLOCK_HZ` to 24 MHz **in the same change** (prescaler 23 999). Otherwise every USB timeout expires 6× too early.
@@ -44,14 +44,15 @@ This replaces `usb_TODOS.md` at the repository root.
 
 ## 3. `usb.c`: start-up (§3–§5), compile-check only
 
-- [ ] Add timeouts (`deadline_t`) to the `HSI48RDY`, `AHBIDL` and `CSRST` waits.
-- [ ] Check `GINTSTS.CMOD == 0` after the 25 ms device-mode wait (§4).
-- [ ] Power: `RCC_AHB3ENR.PWREN`, then `PWR_SVMCR.USV` (§3).
-- [ ] Pins: PA11/PA12 alternate function, AF10, very-high speed (§3).
-- [ ] Kernel clock: `RCC_CCIPR1.ICLKSEL = HSI48` (§3).
-- [ ] `GUSBCFG.PHYSEL` before the soft reset, and `GCCFG.PWRDWN` after it (§4).
-- [ ] Device setup (§5): VBUS override, `SDIS`, `PCGCCTL`, `DCFG`, FIFO sizes, TX and RX flushes, endpoint clear loop, interrupt masks, `GAHBCFG`, NVIC, clear `SDIS` last.
-- [ ] Decide how `init_usb()` reports failure (it returns `void` today, so a timeout is silent).
+- [x] Add timeouts (`deadline_t`) to the `HSI48RDY`, `AHBIDL` and `CSRST` waits.
+- [x] Check `GINTSTS.CMOD == 0` after the 25 ms device-mode wait (§4).
+- [x] Power: `RCC_AHB3ENR.PWREN`, then `PWR_SVMCR.USV` (§3).
+- [x] Pins: PA11/PA12 alternate function, AF10, very-high speed (§3).
+- [x] Kernel clock: `RCC_CCIPR1.ICLKSEL = HSI48` (§3).
+- [x] `GUSBCFG.PHYSEL` before the soft reset, and `GCCFG.PWRDWN` after it (§4).
+- [x] Device setup (§5), first part in `init_usb_device()`: `GCCFG.VBDEN` (VBUS sensing on PA9, so no `BVALOEN`/`BVALOVAL` override), `SDIS`, `PCGCCTL`, `DCFG` (full speed, address 0).
+- [ ] Device setup (§5), rest: FIFO sizes (`GRXFSIZ`, `DIEPTXF0`, `DIEPTXF1`), TX and RX flushes with `AHBIDL` waits, endpoint clear loop, interrupt masks, `GAHBCFG`, NVIC, clear `SDIS` last.
+- [ ] Decide how `init_usb()` reports failure (it returns `void` today, so a timeout is silent). `init_usb_device()` returns `bool` but `init_usb()` ignores it; check it once the flushes can time out, or make it `void`.
 
 ## 4. `usb.c`: interrupts and transfers (§6, §7.2, §9)
 
@@ -75,7 +76,8 @@ This replaces `usb_TODOS.md` at the repository root.
 
 ## 6. Bring-up on the board (§10)
 
-- [ ] `dmesg -w` on the Pi shows a new full-speed device and `hid-generic … Gamepad`.
+- [ ] The connector's VBUS net must reach PA9 (`OTG_FS_VBUS`). `usb.c` relies on `VBDEN` sensing with no software Bvalid override, so without that wiring the core never connects. Check the schematic, or fall back to the `BVALOEN`/`BVALOVAL` override as in `usb_mock.c`.
+- [ ] Leave PA9 unconfigured in `enable_usb_pins()` so the VBUS function stays active.- [ ] `dmesg -w` on the Pi shows a new full-speed device and `hid-generic … Gamepad`.
 - [ ] `lsusb -v` shows interface class 3 and EP `0x81` interrupt.
 - [ ] `usbhid-dump` + `hid-decode` match the report descriptor.
 - [ ] `evtest`: every button gives the expected key code.
@@ -86,4 +88,3 @@ This replaces `usb_TODOS.md` at the repository root.
 ## 7. Later (optional)
 
 - [ ] Vendor control channel for the status protocol (spec §7.2: battery, charger, rumble), probably as `SET_REPORT` / vendor requests on EP0 rather than a new endpoint.
-- [ ] Wire VBUS sensing (PA9) if the board allows it, so the device sees unplugs.
