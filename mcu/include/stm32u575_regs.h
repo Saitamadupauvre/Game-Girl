@@ -18,7 +18,6 @@
 
 #define RCC_CR_OFFSET 0x00000000UL // RCC Control clock register 11.8.1 in manual
 #define RCC_CR MMIO32(RCC_BASE_NS + RCC_CR_OFFSET)
-
 #define OTG_FS_BASE_NS 0x42040000UL // STM32 MANUAL page 146
 
 // RCC_AHB2ENR1 bits
@@ -109,6 +108,8 @@
 #define OTG_GRXFSIZ_OFFSET  0x00000024UL
 #define OTG_GRXFSIZ     MMIO32(OTG_FS_BASE_NS + OTG_GRXFSIZ_OFFSET)
 
+#define OTG_GRSTCTL_TXFNUM_ALL  0x10UL     // TXFNUM value that flushes every TX FIFO
+
 #define OTG_GOTGCTL_OFFSET  0x00000000UL
 #define OTG_GAHBCFG_OFFSET  0x00000008UL
 #define OTG_GINTSTS_OFFSET  0x00000014UL
@@ -174,6 +175,18 @@
 #define OTG_GINTSTS_OEPINT      (1UL << 19)
 #define OTG_GINTSTS_WKUINT      (1UL << 31)
 
+// GINTMSK bits, same position as the GINTSTS flag of the same event.
+// Names follow ST's HAL (a trailing M marks the mask version of a flag).
+#define OTG_GINTMSK_RXFLVLM             (1UL << 4)
+#define OTG_GINTMSK_USBSUSPM            (1UL << 11)
+#define OTG_GINTMSK_USBRST              (1UL << 12)
+#define OTG_GINTMSK_ENUMDNEM            (1UL << 13)
+#define OTG_GINTMSK_IEPINT              (1UL << 18)
+#define OTG_GINTMSK_OEPINT              (1UL << 19)
+#define OTG_GINTMSK_IISOIXFRM           (1UL << 20)     // incomplete isochronous IN transfer
+#define OTG_GINTMSK_PXFRM_IISOOXFRM     (1UL << 21)     // incomplete periodic / isochronous OUT transfer
+#define OTG_GINTMSK_WUIM                (1UL << 31)
+
 #define OTG_GRXSTSP_EPNUM_Msk   0xFUL
 #define OTG_GRXSTSP_BCNT_Pos    4U
 #define OTG_GRXSTSP_BCNT_Msk    (0x7FFUL << OTG_GRXSTSP_BCNT_Pos)
@@ -198,29 +211,43 @@
 #define OTG_DCTL_SDIS           (1UL << 1)
 #define OTG_DCTL_CGINAK         (1UL << 8)
 
-// DIEPCTL / DOEPCTL bits
-#define OTG_DEPCTL_MPSIZ_Msk    0x7FFUL
-#define OTG_DEPCTL_EP0_MPSIZ_Msk 0x3UL
-#define OTG_DEPCTL_USBAEP       (1UL << 15)
-#define OTG_DEPCTL_EPTYP_Pos    18U
-#define OTG_DEPCTL_EPTYP_INTR   (3UL << OTG_DEPCTL_EPTYP_Pos)
-#define OTG_DEPCTL_STALL        (1UL << 21)
-#define OTG_DEPCTL_TXFNUM_Pos   22U
-#define OTG_DEPCTL_CNAK         (1UL << 26)
-#define OTG_DEPCTL_SNAK         (1UL << 27)
-#define OTG_DEPCTL_SD0PID       (1UL << 28)
-#define OTG_DEPCTL_EPDIS        (1UL << 30)
-#define OTG_DEPCTL_EPENA        (1UL << 31)
+// DIEPCTL bits (IN endpoint n)
+#define OTG_DIEPCTL_MPSIZ_Msk       0x7FFUL
+#define OTG_DIEPCTL_EP0_MPSIZ_Msk   0x3UL
+#define OTG_DIEPCTL_USBAEP          (1UL << 15)
+#define OTG_DIEPCTL_EPTYP_Pos       18U
+#define OTG_DIEPCTL_EPTYP_INTR      (3UL << OTG_DIEPCTL_EPTYP_Pos)
+#define OTG_DIEPCTL_STALL           (1UL << 21)
+#define OTG_DIEPCTL_TXFNUM_Pos      22U
+#define OTG_DIEPCTL_CNAK            (1UL << 26)
+#define OTG_DIEPCTL_SNAK            (1UL << 27)
+#define OTG_DIEPCTL_SD0PID          (1UL << 28)
+#define OTG_DIEPCTL_EPDIS           (1UL << 30)
+#define OTG_DIEPCTL_EPENA           (1UL << 31)
 
-// DIEPINT / DOEPINT bits, same positions in DIEPMSK / DOEPMSK
-#define OTG_DEPINT_XFRC         (1UL << 0)
-#define OTG_DIEPINT_TOC         (1UL << 3)
-#define OTG_DOEPINT_STUP        (1UL << 3)
-#define OTG_DEPINT_CLEAR_ALL    0x0000FB7FUL
+// DOEPCTL bits (OUT endpoint n)
+#define OTG_DOEPCTL_STALL           (1UL << 21)
+#define OTG_DOEPCTL_CNAK            (1UL << 26)
+#define OTG_DOEPCTL_SNAK            (1UL << 27)
+#define OTG_DOEPCTL_EPDIS           (1UL << 30)
+#define OTG_DOEPCTL_EPENA           (1UL << 31)
 
-// DIEPTSIZ / DOEPTSIZ fields
-#define OTG_DEPTSIZ_PKTCNT_Pos  19U
-#define OTG_DEPTSIZ_STUPCNT_Pos 29U
+// DIEPINT bits, same positions in DIEPMSK
+#define OTG_DIEPINT_XFRC            (1UL << 0)
+#define OTG_DIEPINT_TOC             (1UL << 3)
+#define OTG_DIEPINT_CLEAR_ALL       0x0000FB7FUL
+
+// DOEPINT bits, same positions in DOEPMSK
+#define OTG_DOEPINT_XFRC            (1UL << 0)
+#define OTG_DOEPINT_STUP            (1UL << 3)
+#define OTG_DOEPINT_CLEAR_ALL       0x0000FB7FUL
+
+// DIEPTSIZ fields
+#define OTG_DIEPTSIZ_PKTCNT_Pos     19U
+
+// DOEPTSIZ fields
+#define OTG_DOEPTSIZ_PKTCNT_Pos     19U
+#define OTG_DOEPTSIZ_STUPCNT_Pos    29U
 
 #define OTG_DTXFSTS_INEPTFSAV_Msk 0x0000FFFFUL
 
