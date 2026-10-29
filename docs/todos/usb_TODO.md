@@ -26,7 +26,7 @@ This replaces `usb_TODOS.md` at the repository root.
 
 ## 1. Clock (§2): blocks USB on the board
 
-- [x] Add a clock module with `clock_init()`: MSIS range 1 → 24 MHz, flash wait states raised **before** the clock goes up.
+- [ ] Add a clock module with `clock_init()`: MSIS range 1 → 24 MHz, flash wait states raised **before** the clock goes up. (Nothing exists yet: `clock_init()` is only referenced in `usb_mock.c`.)
 - [ ] Add the `FLASH_ACR`, `RCC_ICSCR1` and `PWR_VOSR` definitions to `stm32u575_regs.h`.
 - [ ] Check in RM0456 whether USB works in VOS range 4. If not, raise VOS first.
 - [ ] Change `TIM2_INPUT_CLOCK_HZ` to 24 MHz **in the same change** (prescaler 23 999). Otherwise every USB timeout expires 6× too early.
@@ -34,7 +34,7 @@ This replaces `usb_TODOS.md` at the repository root.
 
 ## 2. `hid.c`: pure logic, testable now without the board
 
-- [ ] Create `mcu/src/services/hid.c` and add it to `mcu/CMakeLists.txt`.
+- [ ] Create `mcu/src/services/hid.c` and add it to `mcu/CMakeLists.txt`. (`hid.c` exists as an untracked 3-line stub with only includes, and isn't in `mcu/CMakeLists.txt` yet.)
 - [ ] Define `hid_state_t` (address, configuration, idle rate, last report) and `hid_reset()` (§7.1).
 - [ ] Descriptors (§8): device, 34-byte configuration block, strings, 29-byte HID report descriptor. Choose the VID/PID (`0x1209` pid.codes test PID suggested).
 - [ ] `hid_pack()` (§9).
@@ -51,8 +51,10 @@ This replaces `usb_TODOS.md` at the repository root.
 - [x] Kernel clock: `RCC_CCIPR1.ICLKSEL = HSI48` (§3).
 - [x] `GUSBCFG.PHYSEL` before the soft reset, and `GCCFG.PWRDWN` after it (§4).
 - [x] Device setup (§5), first part in `init_usb_device()`: `GCCFG.VBDEN` (VBUS sensing on PA9, so no `BVALOEN`/`BVALOVAL` override), `SDIS`, `PCGCCTL`, `DCFG` (full speed, address 0).
-- [ ] Device setup (§5), rest: FIFO sizes (`GRXFSIZ`, `DIEPTXF0`, `DIEPTXF1`), TX and RX flushes with `AHBIDL` waits, endpoint clear loop, interrupt masks, `GAHBCFG`, NVIC, clear `SDIS` last.
-- [ ] Decide how `init_usb()` reports failure (it returns `void` today, so a timeout is silent). `init_usb_device()` returns `bool` but `init_usb()` ignores it; check it once the flushes can time out, or make it `void`.
+- [x] Device setup (§5), rest: FIFO sizes (`GRXFSIZ`, `DIEPTXF0`, `DIEPTXF1`), TX and RX flushes with `AHBIDL` waits, endpoint clear loop, interrupt masks, `GAHBCFG`, NVIC, clear `SDIS` last.
+- [x] FIFO layout decided (§5): RX 64, TX0 32, TX1 16 words, at RX 0–63, TX0 64–95, TX1 96–111 (112 of 320 words). Use named constants and compute each start address from the previous start + depth. `usb_mock.c` still uses 128 / 64 / 64.
+- [?] Check in RM0456 before relying on those sizes: the minimum depth for `DIEPTXFx` (TX1 = 16 assumes it is ≤ 16). RX must stay ≥ 28 words (16 + 2 + 10), because SETUP packets can't be NAKed. (Confirmed in RM0456: the 320-word total, from the dedicated 1.25 KB RAM in the features list, and 6 device endpoints including EP0 in Table 749. Use 6 for the endpoint loop count.)
+- [?] Decide how `init_usb()` reports failure (it returns `void` today, so a timeout is silent). `init_usb_device()` returns `bool` but `init_usb()` ignores it; check it once the flushes can time out, or make it `void`.
 
 ## 4. `usb.c`: interrupts and transfers (§6, §7.2, §9)
 
@@ -72,12 +74,13 @@ This replaces `usb_TODOS.md` at the repository root.
 
 - [ ] Startup code (vector table with `OTG_FS_IRQHandler` at IRQ 73, `Reset_Handler`) and a linker script.
 - [ ] ELF and BIN outputs, plus OpenOCD flash, reset and erase targets.
-- [ ] Build with `GAMEGIRL_BUILD_MCU=ON` and `-Werror`, and fix whatever shows up.
+- [x] Build with `GAMEGIRL_BUILD_MCU=ON` and `-Werror`, and fix whatever shows up. (`cmake --build build-mcu` is clean for the current sources; re-run it as `hid.c`, the clock module and the ISR land.)
 
 ## 6. Bring-up on the board (§10)
 
 - [ ] The connector's VBUS net must reach PA9 (`OTG_FS_VBUS`). `usb.c` relies on `VBDEN` sensing with no software Bvalid override, so without that wiring the core never connects. Check the schematic, or fall back to the `BVALOEN`/`BVALOVAL` override as in `usb_mock.c`.
-- [ ] Leave PA9 unconfigured in `enable_usb_pins()` so the VBUS function stays active.- [ ] `dmesg -w` on the Pi shows a new full-speed device and `hid-generic … Gamepad`.
+- [x] Leave PA9 unconfigured in `enable_usb_pins()` so the VBUS function stays active. (True today: it only touches PA11 and PA12. Keep it that way.)
+- [ ] `dmesg -w` on the Pi shows a new full-speed device and `hid-generic … Gamepad`.
 - [ ] `lsusb -v` shows interface class 3 and EP `0x81` interrupt.
 - [ ] `usbhid-dump` + `hid-decode` match the report descriptor.
 - [ ] `evtest`: every button gives the expected key code.
@@ -87,4 +90,5 @@ This replaces `usb_TODOS.md` at the repository root.
 
 ## 7. Later (optional)
 
+- [ ] Handle VBUS plug/unplug: unmask `SRQINT` and `OTGINT` in `GINTMSK`, and on unplug reset `hid_reset()` state and disconnect (`SDIS`). Not needed for first enumeration, since `VBDEN` already gates the pull-up on Bvalid.
 - [ ] Vendor control channel for the status protocol (spec §7.2: battery, charger, rumble), probably as `SET_REPORT` / vendor requests on EP0 rather than a new endpoint.
