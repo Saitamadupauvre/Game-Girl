@@ -24,9 +24,11 @@ The pseudocode uses CMSIS-style names (`OTG.GUSBCFG`, `DIEPCTL(n)`) for readabil
 |---|---|
 | `OTG.GUSBCFG`, `DCTL`, … | `OTG_GUSBCFG`, `OTG_DCTL`, … |
 | `DIEPCTL(n)`, `DOEPTSIZ(n)`, `FIFO(n)`, … | `OTG_DIEPCTL(n)`, `OTG_DOEPTSIZ(n)`, `OTG_FIFO(n)`, … |
-| GINTSTS / GINTMSK bits (`USBRST`, `RXFLVLM`, …) | `OTG_GINTSTS_*`, used for both registers (same bit positions) |
-| DIEPCTL / DOEPCTL bits | `OTG_DEPCTL_*` |
-| DIEPINT / DOEPINT bits | `OTG_DEPINT_XFRC`, `OTG_DIEPINT_TOC`, `OTG_DOEPINT_STUP` |
+| GINTSTS flags (`USBRST`, `RXFLVL`, …) | `OTG_GINTSTS_*` |
+| GINTMSK mask bits (`USBRST`, `RXFLVLM`, …), same bit positions as the flags | `OTG_GINTMSK_*`, with ST's HAL names (a trailing `M` marks the mask version) |
+| DIEPCTL bits / DOEPCTL bits | `OTG_DIEPCTL_*` / `OTG_DOEPCTL_*` |
+| DIEPINT bits / DOEPINT bits (also used for DIEPMSK / DOEPMSK) | `OTG_DIEPINT_*` (`XFRC`, `TOC`) / `OTG_DOEPINT_*` (`XFRC`, `STUP`) |
+| DIEPTSIZ fields / DOEPTSIZ fields | `OTG_DIEPTSIZ_*` / `OTG_DOEPTSIZ_*` |
 
 The `clock_init()` registers in §2 (`FLASH.ACR`, `RCC.ICSCR1`, `PWR.VOSR`) are **not** defined yet.
 
@@ -69,7 +71,7 @@ USB names directions from the **host's** point of view, so "OUT" and "receive" m
 | **IN** | device → host (the STM32 transmits) | `DIEPCTL`, `DIEPTSIZ`, `DIEPINT` | one **TX** FIFO per IN endpoint |
 | **OUT** | host → device (the STM32 receives) | `DOEPCTL`, `DOEPTSIZ`, `DOEPINT` | one **RX** FIFO shared by all OUT endpoints |
 
-The gamepad uses two endpoints:
+The core has 6 bidirectional device endpoints including EP0 (EP0 plus 5 IN and 5 OUT, RM0456 Table 749 and §72.2.3), but the gamepad uses two:
 
 | Endpoint | Type | Halves used | FIFO | Carries |
 |---|---|---|---|---|
@@ -185,7 +187,7 @@ This is why turning HSI48 on (`HSI48ON`) is not enough. That only starts the osc
 | **VBUS sensing / `BVALOEN`+`BVALOVAL`** | The USB spec forbids a device from switching on its D+ pull-up unless the host is supplying VBUS. A self-powered device must never push current into an unpowered host. So the core won't connect until it sees a valid VBUS, normally on a sense pin (PA9). If VBUS isn't wired to that pin, the core thinks no cable is plugged in and **never connects**. The override bits tell it "VBUS is valid". The trade-off: the core can no longer detect an unplug, so the battery-powered Game GIRL would keep its pull-up on with no cable attached. That's harmless in practice, but it's a reason to wire VBUS sensing if the board allows it. |
 | **`DCTL.SDIS` during setup** | A full-speed device announces itself by pulling **D+ high through 1.5 kΩ**. The host detects that and starts enumerating straight away. Keep the device "soft-disconnected" until FIFOs, masks and the IRQ are ready, or the host sends requests nobody is ready to answer. |
 | **`DCFG.DSPD = full speed`** | The core can also run at high speed with an external PHY. This tells it to use 12 Mbit/s full speed. |
-| **FIFO sizes** | The core has one shared block of packet RAM (about 1.25 KB), and software decides how it is split. **RX** is a single shared FIFO, because every OUT and SETUP packet arrives in one queue, tagged with a status word saying which endpoint it belongs to. **Each IN endpoint gets its own TX FIFO**, so a gamepad report waiting on EP1 can't block an EP0 reply during enumeration. If two regions overlap, packets corrupt each other. |
+| **FIFO sizes** | The core has one block of dedicated packet RAM (1.25 KB = 320 words, separate from the main SRAM), and software decides how it is split. **RX** is a single shared FIFO, because every OUT and SETUP packet arrives in one queue, tagged with a status word saying which endpoint it belongs to. **Each IN endpoint gets its own TX FIFO**, so a gamepad report waiting on EP1 can't block an EP0 reply during enumeration. If two regions overlap, packets corrupt each other. |
 | **Flush after sizing** | This clears any stale read/write pointers left over from before the new sizes. |
 | **Three interrupt switches** | `GINTMSK` picks *which* core events raise the USB interrupt. `GAHBCFG.GINTMSK` is the core's master on/off switch. The NVIC decides whether the *CPU* takes that interrupt. All three must be on. Miss one and nothing happens, with no error. |
 | **Vector table entry** | When the NVIC accepts IRQ 73, the CPU jumps to the address stored in slot 73 of the vector table. If that slot holds the default handler, the CPU hangs in an infinite loop. |
@@ -382,12 +384,22 @@ usb_device_init():
           DAD (bits 10:4) = 0
 
     // --- FIFO RAM layout (units = 32-bit words) ---
-    //   ⚠ RM: OTG_FS FIFO RAM total = 1.25 KB = 320 words. Confirm.
-    GRXFSIZ   = 128                              // RX FIFO, shared by all OUT EPs
-    DIEPTXF0  = (64 << 16) | 128                 // depth 64 words, start at 128
-    DIEPTXF1  = (64 << 16) | 192                 // depth 64 words, start at 192
-                                                 // total 256 ≤ 320 ✔
+    //   ✔ RM0456 (OTG_FS features): dedicated FIFO RAM of 1.25 KB = 1280 / 4 = 320 words.
+    //                (Table 749 rounds it to "1.2 KB"; the 112 words used here fit either way.)
+    GRXFSIZ   = 64                               // RX FIFO, shared by all OUT EPs, starts at 0
+    DIEPTXF0  = (32 << 16) | 64                  // depth 32 words, start at 64
+    DIEPTXF1  = (16 << 16) | 96                  // depth 16 words, start at 96
+                                                 // total 112 ≤ 320 ✔
     (DIEPTXF format: [31:16] depth in words, [15:0] start address in words)
+    (each start address = previous start + previous depth, so compute them from the sizes)
+
+    // Why these sizes (only EP0 and EP1 IN exist, see §0):
+    //   RX   64: RM minimum is 28 words (1 EP0 max packet = 16, + 2 status, + 10 for SETUP packets,
+    //            RM0456 72.16.5). SETUP packets cannot be NAKed, so keep real margin above it.
+    //   TX0  32: RM minimum is 16 (one EP0 max packet). Every EP0 reply is a single packet ≤ 64 bytes.
+    //   TX1  16: the 2-byte report in an 8-byte max packet needs only 2 words.
+    //            ⚠ RM: 16 assumes the minimum depth for DIEPTXFx is ≤ 16. Confirm.
+    //   usb_mock.c still uses 128 / 64 / 64. Both layouts work, the mock is just larger than needed.
 
     flush_tx_fifo(all):  wait AHBIDL; GRSTCTL = TXFFLSH | (0x10 << 6); wait TXFFLSH==0 ✔ HAL
     flush_rx_fifo():     wait AHBIDL; GRSTCTL = RXFFLSH;               wait RXFFLSH==0
@@ -400,7 +412,7 @@ usb_device_init():
     GINTSTS = 0xFFFFFFFF                          // clear any pending (write-1-to-clear)
     GINTMSK = USBRST | ENUMDNEM | RXFLVLM | IEPINT | OEPINT | USBSUSPM | WUIM
               // bits 12, 13, 4, 18, 19, 11, 31                 ✔ CMSIS
-              // regs.h: OTG_GINTSTS_USBRST | _ENUMDNE | _RXFLVL | _IEPINT | _OEPINT | _USBSUSP | _WKUINT
+              // regs.h: OTG_GINTMSK_USBRST | _ENUMDNEM | _RXFLVLM | _IEPINT | _OEPINT | _USBSUSPM | _WUIM
     GAHBCFG |= GINTMSK                            // bit 0: global interrupt enable ✔ CMSIS
 
     NVIC enable OTG_FS_IRQn = 73                  ✔ CMSIS
