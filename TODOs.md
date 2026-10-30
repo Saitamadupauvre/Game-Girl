@@ -18,7 +18,7 @@ Host tests `gamegirl-input-tests` and `gamegirl-timer-tests` pass.
 - [ ] Replace the 25 ms spin in `enable_usb_cores()` with a non-blocking USB state machine, as `docs/mcu/timer-layers.md` requires, or document it as an accepted boot-time exception.
 - [x] VBUS sensing on PA9 (`GCCFG.VBDEN`), `SDIS`, `PCGCCTL` and `DCFG` in `init_usb_device()`. The board must wire VBUS to PA9.
 - [ ] Implement FIFO sizing (`GRXFSIZ`, TX FIFOs), the rest of the device configuration, enumeration and descriptors.
-- [ ] Use `hid_report_t` (`mcu/include/hid.h`): convert `input_state_t.current` into a report, add the HID report descriptor, and unit-test report packing for every button.
+- [x] Use `hid_report_t` (`mcu/include/hid.h`): convert `input_state_t.current` into a report, add the HID report descriptor, and unit-test report packing for every button. (Done in `hid.c` and `test_hid.c`; sending the report from `usb.c` is still open in `docs/todos/usb_TODO.md` §4.)
 
 ## Clock tree
 
@@ -38,7 +38,7 @@ Host tests `gamegirl-input-tests` and `gamegirl-timer-tests` pass.
 - [ ] `docs/mcu/drivers/timer.md` still describes the old once-per-millisecond update-flag design (`PSC=3`, `ARR=999`, `timer_event_elapsed()`) and a clock-enable bug that is already fixed. Rewrite it or replace it with `docs/mcu/timer-layers.md`.
 - [ ] `docs/mcu/drivers/gpio.md` tells callers to use `enable_GPIO_clocks()` and `set_GPIO_pins()`, which are now static. The public entry point is `init_GPIO()`.
 - [ ] `docs/mcu/drivers/boardless-tests.md` does not mention `gamegirl-timer-tests`.
-- [ ] The spec (`docs/Game_GIRL_Pi4_STM32_Cahier_des_charges(1).md`) and `docs/sprints/non_hardware_firmware.md` include a **Menu** button and use a different bit order from `btn_t` in `mcu/include/inputs.h` (12 buttons, no Menu). Decide which is authoritative, then add Menu or update the docs.
+- [ ] The spec (`docs/Game_GIRL_Pi4_STM32_Cahier_des_charges(1).md`) and `docs/sprints/non_hardware_firmware.md` include a **Menu** button and use a different bit order from `btn_t` in `mcu/include/inputs.h` (12 buttons, no Menu). Decision for the USB gamepad (`docs/todos/usb_TODO.md`): no Menu button, DS-style set as in `btn_t`. Update the spec and sprint doc to match.
 - [ ] `timer_architecture(1).md` at the repo root looks like a draft of `docs/mcu/timer-layers.md`. Merge it or delete it.
 - [ ] `docs/file_tree.md` and the spec's layout show `mcu/drivers/` and `mcu/services/` at the top level; the code uses `mcu/src/drivers/`, `mcu/src/services/` and `mcu/src/common/`. Align one with the other.
 
