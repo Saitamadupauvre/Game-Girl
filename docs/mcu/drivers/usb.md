@@ -4,7 +4,7 @@
 
 This is the full bring-up flow for making the STM32U575 enumerate on the Raspberry Pi as a USB HID gamepad (spec §7.1), written as pseudocode. It is a guide for writing `mcu/src/drivers/usb.c` and `mcu/src/services/hid.c` (see [Code layout](#code-layout)), not code to paste.
 
-It follows the section order of `usb_TODOS.md`.
+The section numbers (§n) match the checklist in [`docs/todos/usb_TODO.md`](../../todos/usb_TODO.md).
 
 `mcu/src/drivers/usb_mock.c` is a complete single-file reference implementation of this guide. It compiles but has never run on hardware, it is not in CMake, and it has known problems (see [References](#references)). Use it to compare against, not to copy.
 
@@ -184,7 +184,7 @@ This is why turning HSI48 on (`HSI48ON`) is not enough. That only starts the osc
 
 | Step | Why |
 |---|---|
-| **VBUS sensing / `BVALOEN`+`BVALOVAL`** | The USB spec forbids a device from switching on its D+ pull-up unless the host is supplying VBUS. A self-powered device must never push current into an unpowered host. So the core won't connect until it sees a valid VBUS, normally on a sense pin (PA9). If VBUS isn't wired to that pin, the core thinks no cable is plugged in and **never connects**. The override bits tell it "VBUS is valid". The trade-off: the core can no longer detect an unplug, so the battery-powered Game GIRL would keep its pull-up on with no cable attached. That's harmless in practice, but it's a reason to wire VBUS sensing if the board allows it. |
+| **VBUS sensing (`VBDEN`) / `BVALOEN`+`BVALOVAL`** | The USB spec forbids a device from switching on its D+ pull-up unless the host is supplying VBUS. A self-powered device must never push current into an unpowered host. So the core won't connect until it sees a valid VBUS on the sense pin (PA9). `usb.c` uses this: it sets `GCCFG.VBDEN`, so **the board must wire the connector's VBUS to PA9**, otherwise the core thinks no cable is plugged in and **never connects**. The fallback is the override bits `BVALOEN`+`BVALOVAL`, which tell the core "VBUS is valid". The trade-off: the core can no longer detect an unplug, so the battery-powered Game GIRL would keep its pull-up on with no cable attached. That's harmless in practice, and `usb_mock.c` uses it. |
 | **`DCTL.SDIS` during setup** | A full-speed device announces itself by pulling **D+ high through 1.5 kΩ**. The host detects that and starts enumerating straight away. Keep the device "soft-disconnected" until FIFOs, masks and the IRQ are ready, or the host sends requests nobody is ready to answer. |
 | **`DCFG.DSPD = full speed`** | The core can also run at high speed with an external PHY. This tells it to use 12 Mbit/s full speed. |
 | **FIFO sizes** | The core has one block of dedicated packet RAM (1.25 KB = 320 words, separate from the main SRAM), and software decides how it is split. **RX** is a single shared FIFO, because every OUT and SETUP packet arrives in one queue, tagged with a status word saying which endpoint it belongs to. **Each IN endpoint gets its own TX FIFO**, so a gamepad report waiting on EP1 can't block an EP0 reply during enumeration. If two regions overlap, packets corrupt each other. |
@@ -369,12 +369,12 @@ usb_core_init():
 
 ```text
 usb_device_init():
-    // --- VBUS: Pi supplies VBUS, but is it wired to a sense pin? ---
-    if NO VBUS sensing (simplest, and the default suggestion):    ✔ HAL
-        GCCFG   &= ~VBDEN                       // bit 21
-        GOTGCTL |= BVALOEN | BVALOVAL           // bits 6, 7: pretend VBUS is valid
-    else:
-        GCCFG   |= VBDEN                        // needs VBUS on PA9 ⚠ datasheet/board
+    // --- VBUS: the Pi supplies it, and the board wires it to PA9 (OTG_FS_VBUS) ---
+    GCCFG   |= VBDEN                            // bit 21: sense VBUS on PA9. Leave PA9 unconfigured.
+                                                // usb.c does this, no override needed
+    // Fallback if the board does NOT wire VBUS to PA9 (this is what usb_mock.c does):  ✔ HAL
+    //     GCCFG   &= ~VBDEN
+    //     GOTGCTL |= BVALOEN | BVALOVAL        // bits 6, 7: pretend VBUS is valid
 
     DCTL     |= SDIS                            // bit 1: stay disconnected during setup
     PCGCCTL   = 0                               // restart PHY clock
@@ -409,7 +409,8 @@ usb_device_init():
                          DIEPTSIZ = DOEPTSIZ = 0,
                          DIEPINT = DOEPINT = 0xFB7F            ✔ HAL
 
-    GINTSTS = 0xFFFFFFFF                          // clear any pending (write-1-to-clear)
+    GINTSTS = 0xBFFFFFFF                          // clear pending flags (write-1-to-clear), except bit 30 (SRQINT),
+                                                  // which in device mode is the VBUS valid status ✔ HAL
     GINTMSK = USBRST | ENUMDNEM | RXFLVLM | IEPINT | OEPINT | USBSUSPM | WUIM
               // bits 12, 13, 4, 18, 19, 11, 31                 ✔ CMSIS
               // regs.h: OTG_GINTMSK_USBRST | _ENUMDNEM | _RXFLVLM | _IEPINT | _OEPINT | _USBSUSPM | _WUIM
@@ -422,7 +423,7 @@ usb_device_init():
     DCTL &= ~SDIS                                 // CONNECT: D+ pull-up on, host sees us
 ```
 
-> `OTG_FS_IRQHandler` only works once you have a vector table and startup code (`usb_TODOS.md` §8). Without them, no interrupt fires and enumeration cannot happen.
+> `OTG_FS_IRQHandler` only works once you have a vector table and startup code ([`usb_TODO.md`](../../todos/usb_TODO.md) §5). Without them, no interrupt fires and enumeration cannot happen.
 
 ---
 
@@ -612,7 +613,7 @@ hid_handle_setup(s[8], state) -> usb_reply_t:
 
     // --- HID, recipient = interface ---
     (0x81, GET_DESCRIPTOR=6):
-        0x22 REPORT → DATA(hid_report_desc, 29)
+        0x22 REPORT → DATA(hid_report_desc, 55)
         0x21 HID    → DATA(cfg_desc + 18, 9)
         else        → STALL
     (0x21, SET_IDLE=0x0A):        state.idle_rate = wValue >> 8; ZLP    // Linux sends this
@@ -697,7 +698,7 @@ len type total  nIf  cfg# iCfg attr  MaxPower = 50 × 2 mA = 100 mA
                     =HID   =none   =none   (sub/proto 0 = not a boot device)
 -- HID (9) — HID 1.11 §6.2.1 --
 09 21  11 01  00       01      22         1D 00
-       bcdHID country  nDesc   type=REPORT  wLength = 29
+       bcdHID country  nDesc   type=REPORT  wLength = 55
 -- Endpoint (7) --
 07 05  81       03          08 00      01
        EP1 IN   interrupt   wMaxPkt=8  bInterval = 1 ms (FS: in ms)
@@ -710,23 +711,36 @@ str[0] = 04 03 09 04                       // language ID list: 0x0409 (en-US)
 str[n] = (2 + 2*len) 03 <UTF-16LE chars>   // e.g. "Game GIRL"
 ```
 
-### 8.4 HID report descriptor (29 bytes) — 12 buttons + 4 padding bits
+### 8.4 HID report descriptor (55 bytes) — 8 buttons + hat switch
 
 ```text
 05 01     Usage Page (Generic Desktop)
 09 05     Usage (Game Pad)
 A1 01     Collection (Application)
 05 09       Usage Page (Button)
-19 01       Usage Minimum (Button 1)
-29 0C       Usage Maximum (Button 12)
+09 01       Usage (Button 1)              ┐
+09 02       Usage (Button 2)              │
+09 04       Usage (Button 4)              │ the 8 buttons are listed one by one,
+09 05       Usage (Button 5)              │ so Linux only registers these 8 keys
+09 07       Usage (Button 7)              │
+09 08       Usage (Button 8)              │
+09 0B       Usage (Button 11)             │
+09 0C       Usage (Button 12)             ┘
 15 00       Logical Minimum (0)
 25 01       Logical Maximum (1)
 75 01       Report Size (1)
-95 0C       Report Count (12)
-81 02       Input (Data, Var, Abs)        ← 12 button bits
+95 08       Report Count (8)
+81 02       Input (Data, Var, Abs)        ← byte 0, 8 button bits
+05 01       Usage Page (Generic Desktop)
+09 39       Usage (Hat switch)
+15 00       Logical Minimum (0)
+25 07       Logical Maximum (7)           ← 8 is out of range = null state (released)
 75 04       Report Size (4)
 95 01       Report Count (1)
-81 03       Input (Const, Var, Abs)       ← 4 padding bits
+81 42       Input (Data, Var, Abs, Null state)   ← byte 1, low nibble
+75 04       Report Size (4)
+95 01       Report Count (1)
+81 03       Input (Const, Var, Abs)       ← byte 1, high nibble: padding
 C0        End Collection
 ```
 
@@ -735,32 +749,31 @@ Check it with `hid-decode` from hid-tools rather than by eye.
 Resulting report, 2 bytes, no report ID:
 
 ```text
-byte 0: bit0 = Button 1 … bit7 = Button 8
-byte 1: bit0 = Button 9 … bit3 = Button 12, bits 7:4 = 0
+byte 0: bit0..bit7 = the 8 buttons, in the order of the table in §8.5
+byte 1: bits 3:0 = hat (0 up, 1 up-right, 2 right, 3 down-right, 4 down, 5 down-left, 6 left, 7 up-left, 8 released), bits 7:4 = 0
 ```
 
-### 8.5 Button order is a design decision
+### 8.5 Button layout: standard Linux gamepad, named by position
 
-Linux's `hid-input` maps Button *n* on a Game Pad to `BTN_GAMEPAD + (n-1)`, so the order decides the evdev names. This mapping is from memory of `drivers/hid/hid-input.c`; check it with `evtest`.
+The console has a DS-style button set (A, B, X, Y, D-pad, L, R, Start, Select) in a Steam Deck–shaped body. The report uses the standard Linux gamepad layout, named by position as Xbox-style pads are. Linux maps Button *n* on a Game Pad to `BTN_GAMEPAD + (n-1)`. This mapping is from memory of `drivers/hid/hid-input.c`; check it with `evtest`.
 
-| Button # | evdev code | Current `btn_t` bit at that position |
-|---|---|---|
-| 1 | `BTN_SOUTH` / `BTN_A` | A ✔ |
-| 2 | `BTN_EAST` / `BTN_B` | B ✔ |
-| 3 | `BTN_C` | X ✗ |
-| 4 | `BTN_NORTH` / `BTN_X` | Y |
-| 5 | `BTN_WEST` / `BTN_Y` | Up |
-| 7 / 8 | `BTN_TL` / `BTN_TR` | Left / Right |
-| 11 / 12 | `BTN_SELECT` / `BTN_START` | Select / Start ✔ |
-| 13 | `BTN_MODE` | — (natural spot for **Menu**) |
+The DS diamond has A on the right and B at the bottom, which is the opposite of an Xbox pad. A is therefore `BTN_EAST` and B is `BTN_SOUTH`, so a game that confirms with the bottom button gets your B.
 
-You have three options:
+| Report bit | HID Button | evdev code | Console button |
+|---|---|---|---|
+| 0 | 1 | `BTN_SOUTH` | B (bottom) |
+| 1 | 2 | `BTN_EAST` | A (right) |
+| 2 | 4 | `BTN_NORTH` | X (top) |
+| 3 | 5 | `BTN_WEST` | Y (left) |
+| 4 | 7 | `BTN_TL` | L |
+| 5 | 8 | `BTN_TR` | R |
+| 6 | 11 | `BTN_SELECT` | Select |
+| 7 | 12 | `BTN_START` | Start |
+| hat | — | `ABS_HAT0X` / `ABS_HAT0Y` | D-pad |
 
-1. **Report bits = `btn_t` bits.** The packer is trivial, and you remap in the emulator.
-2. **Reorder in the packer** to match the Linux names. This adds a lookup table.
-3. **Send the D-pad as a hat switch or X/Y axes** instead of buttons. That's the conventional gamepad layout, and some apps and udev only treat a device as a joystick if it has axes. Check with `udevadm info /dev/input/eventX` (look for `ID_INPUT_JOYSTICK=1`).
-
-The spec's enum (Cahier des charges §6.3) has `BTN_MENU`, but `btn_t` has no Menu button. Settle that before freezing the descriptor.
+- **Menu:** there is no Menu button. The spec's example enum has `BTN_MENU`, but the DS layout doesn't need one. Button 13 (`BTN_MODE`) stays free if a Home-style button is added later, which would take one more report bit.
+- **Opposite D-pad directions** (Up+Down, Left+Right) cancel on their axis. Up+Down+Right reads as Right.
+- **Mapping file on the Pi:** the VID/PID is a test pair, so SDL's controller database has no entry for it. Ship an `SDL_GAMECONTROLLERCONFIG` string or a RetroArch autoconfig file keyed on the VID/PID. Check how udev classifies the device with `udevadm info /dev/input/eventX` (look for `ID_INPUT_JOYSTICK=1`).
 
 ---
 
@@ -769,7 +782,9 @@ The spec's enum (Cahier des charges §6.3) has `BTN_MENU`, but `btn_t` has no Me
 ```text
 // hid.c — pure, host-testable, no registers
 hid_pack(uint16 current) -> hid_report_t:
-    return { btn_low = current & 0xFF, btn_high = (current >> 8) & 0x0F }
+    buttons = bit n set when button_order[n] is held in current      // B, A, X, Y, L, R, Select, Start
+    hat     = hat_lut[vertical + 1][horizontal + 1]                  // opposite directions cancel
+    return { buttons, hat }
 
 // usb.c
 usb_hid_send_if_changed(inputs):                  // called every main-loop pass
@@ -786,11 +801,11 @@ usb_hid_send_if_changed(inputs):                  // called every main-loop pass
     ep1_busy = true                               // set BEFORE enabling (ISR clears it)
     DIEPTSIZ(1) = (1 << 19) | 2                   // 1 packet, 2 bytes
     DIEPCTL(1) |= EPENA | CNAK
-    FIFO(1)     = report.btn_low | (report.btn_high << 8)
+    FIFO(1)     = report.buttons | (report.hat << 8)
     NVIC_ISER2 = 1 << 9                           // unmask
 
     last_sent = report;  report_pending = false
-    hid_state.last_report = { report.btn_low, report.btn_high }   // for GET_REPORT
+    hid_state.last_report = { report.buttons, report.hat }   // for GET_REPORT
     if rate != 0: timer_start(&idle_deadline, rate * 4)           // SET_IDLE unit = 4 ms
 ```
 
@@ -799,7 +814,7 @@ Two things the simple version gets wrong:
 - **`idle_rate = 0` means "never resend"**, and Linux sends exactly that. A plain "unchanged and the timer hasn't expired" test treats a never-started timer as expired, and resends the same report on every poll.
 - **After (re)configuration, the current state must go out once** even if it equals `last_sent`. If a button is held through a host reset, `last_sent` still matches and the host would never learn about it. `report_pending` covers that.
 
-`NVIC_ICER2` isn't in `stm32u575_regs.h` yet. Add it next to `NVIC_ISER2`.
+`NVIC_ICER2` is defined in `stm32u575_regs.h`, next to `NVIC_ISER2`.
 
 ### EP1 transfer cycle
 
@@ -834,17 +849,18 @@ EP1 idle again         → NAK on every poll until the buttons change
 ### Host tests (`mcu/tests/test_hid.c`)
 
 `hid_pack`:
-- every single button maps to the right bit
-- no buttons pressed gives `{0, 0}`
-- all buttons pressed gives `{0xFF, 0x0F}`
-- bits 12–15 of `current` never leak into the padding
+- every single button maps to the right report bit (§8.5), with the hat released
+- no buttons pressed gives `{0, 8}`
+- all 8 buttons pressed gives `{0xFF, 8}`
+- each of the 8 D-pad directions gives the right hat value, and opposite directions cancel on their axis
+- the D-pad never sets a button bit, and unused bits of `btn_t` never reach the report
 
 `hid_handle_setup`:
 - `GET_DESCRIPTOR(device)` with `wLength` 8, 18 and 64 gives `DATA` of length 8, 18 and 18
 - `GET_DESCRIPTOR(configuration)` gives 34 bytes, and `wTotalLength` inside it equals 34
 - `GET_DESCRIPTOR(string 0)` gives `04 03 09 04`, string 2 is valid UTF-16LE with the right `bLength`, and an unknown index gives `STALL`
 - `GET_DESCRIPTOR(device qualifier)` gives `STALL`
-- HID `GET_DESCRIPTOR(report)` gives 29 bytes, and the HID descriptor's `wDescriptorLength` equals 29
+- HID `GET_DESCRIPTOR(report)` gives 55 bytes, and the HID descriptor's `wDescriptorLength` equals 55
 - `SET_ADDRESS(5)` gives `ZLP` and `state.address == 5`
 - `SET_CONFIGURATION(1)` / `(0)` give `ZLP` and update `state.configuration`, and `SET_CONFIGURATION(2)` gives `STALL`
 - `SET_IDLE` stores `wValue >> 8`
@@ -910,6 +926,7 @@ Common failures, roughly in order of likelihood:
   - `ep1_activate()` doesn't flush TX FIFO 1 (§7.2).
   - Arming EP1 from the main loop isn't protected against the ISR (§9).
   - `init_usb()` returns `void`, so a start-up timeout leaves the device disconnected with nothing reported.
+  - It uses the `BVALOEN`/`BVALOVAL` override instead of VBUS sensing, FIFO sizes of 128 / 64 / 64 words, and the old 12-button report (`hid_pack` and the report descriptor have since changed, §8.4 and §8.5).
 
 ### Other DWC2 drivers (same Synopsys core, independent code)
 
