@@ -34,13 +34,15 @@ This replaces `usb_TODOS.md` at the repository root.
 
 ## 2. `hid.c`: pure logic, testable now without the board
 
-- [ ] Create `mcu/src/services/hid.c` and add it to `mcu/CMakeLists.txt`. (`hid.c` exists as an untracked 3-line stub with only includes, and isn't in `mcu/CMakeLists.txt` yet.)
-- [ ] Define `hid_state_t` (address, configuration, idle rate, last report) and `hid_reset()` (§7.1).
-- [ ] Descriptors (§8): device, 34-byte configuration block, strings, 29-byte HID report descriptor. Choose the VID/PID (`0x1209` pid.codes test PID suggested).
-- [ ] `hid_pack()` (§9).
-- [ ] `hid_handle_setup()` returning `usb_reply_t`, already clipped to `wLength` (§7.1).
-- [ ] Create `mcu/tests/test_hid.c` and a `gamegirl-hid-tests` target in `mcu/tests/CMakeLists.txt`, modelled on `gamegirl-input-tests`. Cover the test list in §9.
-- [ ] Settle the button questions before freezing the report descriptor (§8.5): the Menu button (spec has it, `btn_t` doesn't) and the button order / D-pad as buttons vs hat.
+- [x] Create `mcu/src/services/hid.c` and add it to `mcu/CMakeLists.txt`.
+- [x] Define `hid_state_t` (address, configuration, idle rate, last report) and `hid_reset()` (§7.1).
+- [x] Descriptors (§8): device, 34-byte configuration block, strings, 55-byte HID report descriptor. VID/PID is `0x1209:0x0001` (pid.codes test PID); strings are "Game Girl" / serial `000001`.
+- [x] `hid_pack()` (§9).
+- [x] `hid_handle_setup()` returning `usb_reply_t`, already clipped to `wLength` (§7.1).
+- [x] Create `mcu/tests/test_hid.c` and a `gamegirl-hid-tests` target in `mcu/tests/CMakeLists.txt`, modelled on `gamegirl-input-tests`. Cover the test list in §9. (Passes under ctest.)
+- [x] Button layout decided (§8.5): standard Linux gamepad named by position, 8 buttons (B, A, X, Y, L, R, Select, Start) plus the D-pad as a hat switch, no Menu button. Report is 2 bytes.
+- [ ] Ship a mapping for the Pi so SDL / RetroArch recognise the pad (an `SDL_GAMECONTROLLERCONFIG` string or a RetroArch autoconfig keyed on the VID/PID). Check with `evtest` and `udevadm info` first.
+- [ ] Check the report descriptor with `hid-decode` and the descriptors with `lsusb -v` once on the board.
 
 ## 3. `usb.c`: start-up (§3–§5), compile-check only
 
@@ -58,14 +60,14 @@ This replaces `usb_TODOS.md` at the repository root.
 
 ## 4. `usb.c`: interrupts and transfers (§6, §7.2, §9)
 
-- [ ] `txfifo_write()`, `rxfifo_read()`, and the TX/RX flush helpers as `static` functions (§6.6).
+- [x] `txfifo_write()`, `rxfifo_read()`, and the TX/RX flush helpers as `static` functions (§6.6). (`usb_txfifo_write()` and `usb_rxfifo_read()` reviewed. The build stays red with `-Wunused-function` until they have callers.)
 - [ ] `OTG_FS_IRQHandler` dispatching to the event handlers (§6).
 - [ ] USB reset handler, with `DAINTMSK =` (not `|=`) and `hid_reset()` (§6.1).
 - [ ] Speed-negotiated handler: EP0 64 bytes, `CGINAK`, `TRDT = 0x8` for 24 MHz (§6.2).
-- [ ] RX FIFO handler: SETUP and OUT data (§6.3).
+- [x] RX FIFO handler: SETUP and OUT data (§6.3). (`usb_on_rxfifo()`. It isn't called yet: that's the ISR's job.)
 - [ ] OUT endpoint handler: re-arm EP0 **before** `apply_setup()` (§6.4).
 - [ ] IN endpoint handler: clear flags, `ep1_busy = false` on EP1 `XFRC` (§6.5).
-- [ ] EP0 helpers: `ep0_send`, `ep0_send_zlp`, `ep0_stall`, `ep0_arm_setup`, `ep0_arm_status_out` (§6.6).
+- [x] EP0 helpers: `ep0_send`, `ep0_send_zlp`, `ep0_stall`, `ep0_arm_setup`, `ep0_arm_status_out` (§6.6). (All five are in `usb.c`, reviewed except `ep0_send_zlp`, which was added after the last review.)
 - [ ] `apply_setup()`, `ep1_activate()` (with the TX FIFO 1 flush) and `ep1_deactivate()` (§7.2).
 - [ ] `usb_hid_send_if_changed()` with the idle-rate, `report_pending` and IRQ-masking fixes (§9).
 - [ ] Call `usb_hid_send_if_changed(&inputs)` in the main loop in `main.c`.
