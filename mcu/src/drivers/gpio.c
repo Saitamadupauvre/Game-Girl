@@ -133,5 +133,4 @@ void init_GPIO(void)
 {
     enable_GPIO_clocks();
     set_GPIO_pins();
-
 }
