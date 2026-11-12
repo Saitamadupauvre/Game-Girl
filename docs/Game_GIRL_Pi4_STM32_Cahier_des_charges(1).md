@@ -376,7 +376,6 @@ Example commands:
 ```text
 CMD_GET_BATTERY
 CMD_GET_CHARGER_STATE
-CMD_SET_RUMBLE
 CMD_SET_LED
 CMD_GET_FW_VERSION
 CMD_GET_HW_VERSION
@@ -651,18 +650,16 @@ Final size depends on enclosure geometry.
 
 # 13. LEDs
 
-Possible LEDs:
+Two status LEDs:
 
-- power;
-- charging;
-- low battery;
-- status/debug.
+- green: charging;
+- red: low battery, blinking when critical.
 
 LEDs are controlled by STM32 GPIO or PWM.
 
 ---
 
-# 15. Raspberry Pi software stack
+# 14. Raspberry Pi software stack
 
 Target production stack:
 
@@ -686,7 +683,7 @@ The final system should not boot into a normal desktop.
 
 ---
 
-# 16. Linux strategy
+# 15. Linux strategy
 
 Development phase:
 
@@ -704,7 +701,7 @@ Unnecessary services should be removed where practical.
 
 ---
 
-# 17. Game GIRL launcher
+# 16. Game GIRL launcher
 
 Target UI:
 
@@ -732,7 +729,7 @@ Responsibilities:
 
 ---
 
-# 18. GBA emulator
+# 17. GBA emulator
 
 The emulator is custom software.
 
@@ -757,7 +754,7 @@ GBA Emulator
 
 ---
 
-# 19. Emulator CPU core
+# 18. Emulator CPU core
 
 Start with an interpreter.
 
@@ -779,7 +776,7 @@ Prioritize correctness before optimization.
 
 ---
 
-# 20. Emulator memory map
+# 19. Emulator memory map
 
 Approximate GBA map:
 
@@ -809,7 +806,7 @@ void bus_write32(uint32_t addr, uint32_t value);
 
 ---
 
-# 21. Graphics path
+# 20. Graphics path
 
 ```text
 GBA PPU
@@ -836,7 +833,7 @@ This must be benchmarked early.
 
 ---
 
-# 22. Audio path
+# 21. Audio path
 
 ```text
 GBA APU
@@ -859,7 +856,7 @@ MAX98357A
 
 ---
 
-# 23. STM32 firmware philosophy
+# 22. STM32 firmware philosophy
 
 The STM32 firmware should demonstrate low-level embedded work.
 
@@ -885,7 +882,7 @@ Target principles:
 
 ---
 
-# 24. STM32 firmware repository
+# 23. STM32 firmware repository
 
 ```text
 mcu/
@@ -909,7 +906,6 @@ mcu/
 │   ├── buttons.c
 │   ├── battery.c
 │   ├── power.c
-│   ├── rumble.c
 │   └── protocol.c
 │
 └── main.c
@@ -917,7 +913,7 @@ mcu/
 
 ---
 
-# 25. STM32 boot sequence
+# 24. STM32 boot sequence
 
 ```text
 RESET
@@ -941,7 +937,7 @@ main loop
 
 ---
 
-# 26. STM32 main loop
+# 25. STM32 main loop
 
 Conceptually:
 
@@ -963,7 +959,7 @@ sleep / repeat
 
 ---
 
-# 27. Flashing STM32 firmware
+# 26. Flashing STM32 firmware
 
 The Nucleo board includes ST-LINK.
 
@@ -994,7 +990,7 @@ cmake --build build --target erase
 
 ---
 
-# 28. Example CMake flash target
+# 27. Example CMake flash target
 
 ```cmake
 add_custom_target(flash
@@ -1010,7 +1006,7 @@ Exact OpenOCD target filename should be verified against the installed OpenOCD v
 
 ---
 
-# 29. Safe shutdown
+# 28. Safe shutdown
 
 The STM32 should coordinate shutdown.
 
@@ -1038,7 +1034,7 @@ Later revisions can add an MCU-controlled load switch.
 
 ---
 
-# 30. Boot behavior
+# 29. Boot behavior
 
 Target user experience:
 
@@ -1056,7 +1052,7 @@ The normal Linux console should remain hidden from the user.
 
 ---
 
-# 31. Enclosure
+# 30. Enclosure
 
 V1 enclosure:
 
@@ -1072,7 +1068,7 @@ V1 enclosure:
 
 ---
 
-# 32. Mechanical constraints
+# 31. Mechanical constraints
 
 The enclosure must accommodate:
 
@@ -1093,7 +1089,7 @@ Miniaturization is not the primary goal.
 
 ---
 
-# 33. Thermal requirements
+# 32. Thermal requirements
 
 The Raspberry Pi 4 can become warm under sustained load.
 
@@ -1107,7 +1103,7 @@ A fan should only be added if measurements show it is required.
 
 ---
 
-# 34. Prototype hardware list
+# 33. Prototype hardware list
 
 Current V1 components:
 
@@ -1131,7 +1127,7 @@ passive heatsink
 
 ---
 
-# 35. Development phases
+# 34. Development phases
 
 ## Phase 1 — Raspberry Pi bring-up
 
@@ -1323,7 +1319,7 @@ Acceptance:
 
 ---
 
-# 36. Optional Moonlight phase
+# 35. Optional Moonlight phase
 
 Moonlight is optional.
 
@@ -1337,7 +1333,7 @@ Moonlight should not block the core GBA milestone.
 
 ---
 
-# 37. Acceptance criteria
+# 36. Acceptance criteria
 
 A V1 Game GIRL is considered successful when:
 
@@ -1360,14 +1356,13 @@ A V1 Game GIRL is considered successful when:
 
 ---
 
-# 38. Safety requirements
+# 37. Safety requirements
 
 Electrical safety:
 
 - never connect unknown LiPo polarity directly;
 - verify JST polarity with multimeter;
 - do not exceed GPIO voltage limits;
-- do not drive motors from GPIO directly;
 - do not run high-current boost paths through solderless breadboards;
 - use short, adequately thick power wiring;
 - test boost converter before connecting Pi;
@@ -1376,7 +1371,7 @@ Electrical safety:
 
 ---
 
-# 39. Main risks
+# 38. Main risks
 
 ## Risk: SPI display bandwidth
 
@@ -1431,7 +1426,7 @@ Moonlight is not required for first success.
 
 ---
 
-# 40. Future V2 improvements
+# 39. Future V2 improvements
 
 Possible future improvements:
 
@@ -1449,7 +1444,7 @@ Possible future improvements:
 
 ---
 
-# 41. Final V1 block diagram
+# 40. Final V1 block diagram
 
 ```text
                             GAME GIRL V1
@@ -1478,7 +1473,6 @@ Possible future improvements:
              │  ├── debounce                   │
              │  ├── fuel gauge                 │
              │  ├── power button               │
-             │  ├── rumble                     │
              │  └── LEDs                       │
              └────────────────┬────────────────┘
                               │
@@ -1497,7 +1491,7 @@ LiPo ──► charger/power-path ──► TPS61088-class boost ──► 5 V s
 
 ---
 
-# 42. Project positioning
+# 41. Project positioning
 
 Game GIRL V1 should demonstrate:
 

@@ -32,3 +32,13 @@ gamegirl_enable_warnings(gamegirl-timer-tests)
 
 add_test(NAME gamegirl-timer-tests COMMAND gamegirl-timer-tests)
 
+add_executable(gamegirl-led-tests
+    test_led.c
+    ../src/services/led.c
+)
+
+target_include_directories(gamegirl-led-tests PRIVATE ../include)
+target_compile_features(gamegirl-led-tests PRIVATE c_std_17)
+gamegirl_enable_warnings(gamegirl-led-tests)
+
+add_test(NAME gamegirl-led-tests COMMAND gamegirl-led-tests)

@@ -9,6 +9,7 @@ add_library(gamegirl-firmware-objects OBJECT
     src/services/inputs.c
     src/drivers/usb.c
     src/services/hid.c
+    src/services/led.c
 )
 
 target_include_directories(gamegirl-firmware-objects PRIVATE include)

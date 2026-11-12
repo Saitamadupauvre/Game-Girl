@@ -26,7 +26,7 @@ Acceptance: all Game GIRL controls map to the expected HID report bits.
 
 ### USB status protocol
 
-- [ ] Define shared command identifiers for battery, charger, rumble, LEDs, firmware version, hardware version, and shutdown.
+- [ ] Define shared command identifiers for battery, charger, LEDs, firmware version, hardware version, and shutdown.
 - [ ] Define request, response, and `gamegirl_status_t` packet formats.
 - [ ] Implement command parsing and response serialization.
 - [ ] Unit-test valid, malformed, truncated, and unknown commands.
@@ -52,10 +52,9 @@ Acceptance: simulated MAX17043 register data produces correct battery status wit
 
 Acceptance: a shutdown is requested only after the configured hold duration or a critical battery event.
 
-### LED and rumble policies
+### LED policies
 
-- [ ] Define abstract LED states for power, charging, low battery, and debug status.
-- [ ] Define abstract rumble requests and duration handling.
+- [ ] Define abstract states for two LEDs: green charging, red low battery (blinking when critical).
 - [ ] Unit-test policy decisions from simulated system events.
 
 Acceptance: services produce output commands without directly accessing GPIO or PWM registers.
@@ -76,7 +75,7 @@ Acceptance: host tests and the cross-compiled firmware build complete without ph
 - Clock-tree validation and timer interrupt behavior.
 - USB enumeration and HID recognition by Linux.
 - I2C bus communication with the MAX17043.
-- LED brightness, rumble motor drive, and power-button wiring.
+- LED brightness and power-button wiring.
 - OpenOCD flashing, reset, and ST-LINK debugging.
 
 ## Recommended Order
