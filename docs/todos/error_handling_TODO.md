@@ -2,7 +2,7 @@
 
 Goal: no single failure stops the Game Girl. A driver that fails is marked as down and retried, the main loop keeps running (buttons, battery, LEDs, power button), and every failure is visible.
 
-Register references are RM0456 Rev 7. Related lists: [`usb_TODO.md`](usb_TODO.md), [`TODOs.md`](../../TODOs.md).
+Register references are RM0456 Rev 7. Related lists: [`usb_TODO.md`](usb_TODO.md), [`TODOs.md`](../../TODOs.md). Power control and the USB failure policy (escalation ladder, degraded mode): [`power-and-usb-fallback.md`](../mcu/power-and-usb-fallback.md).
 
 ## Principles
 
