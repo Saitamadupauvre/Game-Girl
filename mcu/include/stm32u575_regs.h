@@ -20,6 +20,10 @@
 #define RCC_CR MMIO32(RCC_BASE_NS + RCC_CR_OFFSET)
 #define OTG_FS_BASE_NS 0x42040000UL // STM32 MANUAL page 146
 
+#define RCC_ICSCR1_OFFSET 0x00000008UL   // RCC internal clock sources calibration register 11.8.2
+#define RCC_ICSCR1 MMIO32(RCC_BASE_NS + RCC_ICSCR1_OFFSET)
+#define RCC_ICSCR1 MMIO32(RCC_BASE_NS + RCC_ICSCR1_OFFSET)
+
 // RCC_AHB2ENR1 bits
 
 #define RCC_AHB2ENR1_GPIOAEN        (1UL << 0)
@@ -73,7 +77,7 @@
 
 // GPIOE
 
-#define GPIOE_BASE_NS   0x04202100UL
+#define GPIOE_BASE_NS   0x42021000UL    // STM32 MANUAL page 147
 
 #define GPIOE_MODER MMIO32(GPIOE_BASE_NS + GPIO_MODER_OFFSET)
 #define GPIOE_PUPDR MMIO32(GPIOE_BASE_NS + GPIO_PUPDR_OFFSET)
@@ -211,6 +215,10 @@
 #define OTG_DCTL_SDIS           (1UL << 1)
 #define OTG_DCTL_CGINAK         (1UL << 8)
 
+// DAINT / DAINTMSK: one bit per endpoint, IN in bits 15:0, OUT in bits 31:16. RM0456 72.15.38-39
+#define OTG_DAINT_IEP(n)        (1UL << (n))
+#define OTG_DAINT_OEP(n)        (1UL << (16U + (n)))
+
 // DIEPCTL bits (IN endpoint n)
 #define OTG_DIEPCTL_MPSIZ_Msk       0x7FFUL
 #define OTG_DIEPCTL_EP0_MPSIZ_Msk   0x3UL
@@ -256,8 +264,17 @@
 
 // RCC_CR
 
+#define RCC_CR_MSISON   (1UL << 0)      // RM0456 11.8.1
+#define RCC_CR_MSISRDY  (1UL << 2)
 #define RCC_CR_HSI48ON (1UL << 12)
 #define RCC_CR_HSI48RDY (1UL << 13)
+
+// RCC_ICSCR1. RM0456 11.8.2
+
+#define RCC_ICSCR1_MSISRANGE_Pos    28U
+#define RCC_ICSCR1_MSISRANGE_Msk    (0xFUL << RCC_ICSCR1_MSISRANGE_Pos)
+#define RCC_ICSCR1_MSISRANGE_24MHZ  (0x1UL << RCC_ICSCR1_MSISRANGE_Pos)  // range 1
+#define RCC_ICSCR1_MSIRGSEL         (1UL << 23)     // 1 = use the ranges in ICSCR1, not RCC_CSR
 
 // RCC AHB3 clock enable and kernel clock selection
 
@@ -278,6 +295,13 @@
 #define PWR_SVMCR_OFFSET    0x00000010UL
 #define PWR_SVMCR       MMIO32(PWR_BASE_NS + PWR_SVMCR_OFFSET)
 #define PWR_SVMCR_USV   (1UL << 28)     // VDDUSB valid: removes USB isolation
+
+#define PWR_VOSR_OFFSET     0x0000000CUL    // RM0456 10.10.4
+#define PWR_VOSR        MMIO32(PWR_BASE_NS + PWR_VOSR_OFFSET)
+#define PWR_VOSR_VOS_Pos    16U
+#define PWR_VOSR_VOS_Msk    (0x3UL << PWR_VOSR_VOS_Pos)
+#define PWR_VOSR_VOS_RANGE3 (0x1UL << PWR_VOSR_VOS_Pos)    // 00 = range 4 (reset), 01 = range 3
+#define PWR_VOSR_VOSRDY     (1UL << 15)
 
 // GPIOA
 
