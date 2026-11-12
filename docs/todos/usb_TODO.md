@@ -56,7 +56,7 @@ This replaces `usb_TODOS.md` at the repository root.
 - [x] Device setup (§5), rest: FIFO sizes (`GRXFSIZ`, `DIEPTXF0`, `DIEPTXF1`), TX and RX flushes with `AHBIDL` waits, endpoint clear loop, interrupt masks, `GAHBCFG`, NVIC, clear `SDIS` last.
 - [x] FIFO layout decided (§5): RX 64, TX0 32, TX1 16 words, at RX 0–63, TX0 64–95, TX1 96–111 (112 of 320 words). Use named constants and compute each start address from the previous start + depth. `usb_mock.c` still uses 128 / 64 / 64.
 - [?] Check in RM0456 before relying on those sizes: the minimum depth for `DIEPTXFx` (TX1 = 16 assumes it is ≤ 16). RX must stay ≥ 28 words (16 + 2 + 10), because SETUP packets can't be NAKed. (Confirmed in RM0456: the 320-word total, from the dedicated 1.25 KB RAM in the features list, and 6 device endpoints including EP0 in Table 749. Use 6 for the endpoint loop count.)
-- [?] Decide how `init_usb()` reports failure (it returns `void` today, so a timeout is silent). `init_usb_device()` returns `bool` but `init_usb()` ignores it; check it once the flushes can time out, or make it `void`. (`init_hardware_clock()` already returns `bool`, and `main.c` skips `init_usb()` when it fails. The same pattern would fit here.)
+- [?] Decide how `init_usb()` reports failure (it returns `void` today, so a timeout is silent). `init_usb_device()` returns `bool` but `init_usb()` ignores it; check it once the flushes can time out, or make it `void`. (`init_hardware_clock()` already returns `bool`, and `main.c` skips `init_usb()` when it fails. The same pattern would fit here. Plan: 3 attempts with `OTGRST` between them, then degrade; see [`error_handling_TODO.md`](error_handling_TODO.md) §2.)
 
 ## 4. `usb.c`: interrupts and transfers (§6, §7.2, §9)
 
