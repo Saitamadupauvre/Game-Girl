@@ -30,7 +30,7 @@ The pseudocode uses CMSIS-style names (`OTG.GUSBCFG`, `DIEPCTL(n)`) for readabil
 | DIEPINT bits / DOEPINT bits (also used for DIEPMSK / DOEPMSK) | `OTG_DIEPINT_*` (`XFRC`, `TOC`) / `OTG_DOEPINT_*` (`XFRC`, `STUP`) |
 | DIEPTSIZ fields / DOEPTSIZ fields | `OTG_DIEPTSIZ_*` / `OTG_DOEPTSIZ_*` |
 
-The `clock_init()` registers in §2 (`FLASH.ACR`, `RCC.ICSCR1`, `PWR.VOSR`) are **not** defined yet.
+The §2 clock registers (`RCC_ICSCR1`, `RCC_CR.MSISRDY`, `PWR_VOSR`) are defined. `FLASH_ACR` isn't needed (§2).
 
 ---
 
@@ -38,9 +38,9 @@ The `clock_init()` registers in §2 (`FLASH.ACR`, `RCC.ICSCR1`, `PWR.VOSR`) are 
 
 ```text
 boot
- ├─ clock_init()            raise HCLK above 14.2 MHz (USB FS minimum)
- ├─ timer init              (TIM2 rate depends on the new HCLK)
- ├─ init_usb()
+ ├─ init_hardware_clock()   VOS range 3, then HCLK 4 → 24 MHz (USB FS needs ≥ 14.2 MHz)
+ ├─ init_timer()            (TIM2 prescaler comes from hardware_clock_hz())
+ ├─ init_usb()              (skipped if init_hardware_clock() failed)
  │   ├─ power   : PWR clock on, VDDUSB valid (USV)
  │   ├─ pins    : PA11/PA12 → AF10
  │   ├─ clocks  : HSI48 on, ICLKSEL = HSI48, OTG clock on
@@ -154,8 +154,9 @@ This is why turning HSI48 on (`HSI48ON`) is not enough. That only starts the osc
 | Step | Why |
 |---|---|
 | **Raise HCLK to ≥ 14.2 MHz** | The USB core moves every packet between the wire and its FIFO RAM over the AHB bus, which runs at HCLK. When the host sends an IN token, the device has only a few bit-times to start answering. At 4 MHz the core cannot read the FIFO fast enough. ST's turnaround table starts at 14.2 MHz, so that is the lowest speed it supports. |
-| **Flash wait states first** | Flash memory has a fixed access time. At a higher CPU clock, a read finishes before the flash has its data ready, unless the CPU is told to wait extra cycles. Raise the clock first and the CPU fetches garbage instructions and crashes. So set the wait states *before* increasing the frequency, and lower them only *after* reducing it. |
-| **Update `TIM2_INPUT_CLOCK_HZ`** | TIM2 counts ticks of its bus clock. If HCLK goes from 4 to 24 MHz and the prescaler stays the same, the "1 ms" tick becomes 1/6 ms and every `deadline_t` expires six times too early, including the USB timeouts. |
+| **Core voltage (VOS) first** | The digital core runs from an internal regulator with four voltage ranges. A lower voltage saves power but makes the logic slower, so each range has a maximum clock. The chip resets in range 4 (0.9 V), and **USB doesn't work there** at all. Raise the voltage *before* the frequency, and lower it only *after* reducing the frequency. |
+| **Flash and SRAM wait states** | Flash and SRAM have a fixed access time. At a higher CPU clock, a read can finish before the memory has its data ready, unless the CPU is told to wait extra cycles. Normally they must go up *before* the clock. In range 3 at 24 MHz both stay at 0, so nothing needs changing here. |
+| **TIM2 follows the clock** | TIM2 counts ticks of its bus clock. If HCLK goes from 4 to 24 MHz and the prescaler stays the same, the "1 ms" tick becomes 1/6 ms and every `deadline_t` expires six times too early, including the USB timeouts. `timer.c` computes the prescaler from `hardware_clock_hz()`, so the two can't disagree. |
 | **PWR clock (`PWREN`)** | The PWR block is a peripheral like any other. Its registers ignore writes until its bus clock is on. |
 | **`PWR_SVMCR.USV`** | The USB pins are powered by a separate supply rail, **VDDUSB** (3.3 V). The U5 keeps that domain electrically isolated until software sets `USV` to say "VDDUSB is present and valid". The isolation protects the chip on boards where VDDUSB might be absent. Until the bit is set, the USB transceiver and the PA11/PA12 pads are disconnected from the core, so nothing reaches the wire. |
 | **HSI48** | Full-speed USB runs at 12 Mbit/s, and the core samples it with a 48 MHz clock (4× oversampling). The rate must be within **±0.25 %** (USB 2.0 spec). HSI48 is an internal RC oscillator designed for this. |
@@ -262,46 +263,83 @@ FIFO(n)     = 0x1000 + n*0x1000   (32-bit push/pop port for endpoint n)
 
 ---
 
-## 2. Clocks — `clock_init()`
+## 2. Clocks — `init_hardware_clock()` (`drivers/hardware_clock.c`)
 
-The chip boots on MSIS at 4 MHz. ST's own turnaround table (`USB_SetTurnaroundTime`, ✔ HAL) only covers **HCLK ≥ 14.2 MHz** for full speed, so HCLK must be raised first.
+The chip boots on MSIS at 4 MHz, in voltage range 4. ST's own turnaround table (`USB_SetTurnaroundTime`, ✔ HAL) only covers **HCLK ≥ 14.2 MHz** for full speed, so HCLK must be raised first.
 
-The simplest option is to keep MSIS and switch its range. No PLL is needed.
+The simplest option is to keep MSIS and switch its range. MSIS is already the system clock after reset (`RCC_CFGR1.SW`), so a new range speeds up HCLK, the APB buses and TIM2 at once. No PLL and no clock switch are needed. **24 MHz** (MSIS range 1) is well above the minimum, and its TRDT value is `0x8` (§6.2).
 
-| MSIS range | Freq | Flash wait states at VOS range 4 | Source |
+### Voltage range: USB needs range 3 or higher
+
+| Fact | Source |
+|---|---|
+| "OTG_FS and USB are functional in voltage scaling range 1, 2, and 3." | ✔ RM0456 §10.5.4, note 12 |
+| In range 4, HSI48 is only allowed **divided by 2** (24 MHz). USB needs the full 48 MHz. | ✔ RM0456 Table 115 |
+| Maximum HCLK: range 4 = 25 MHz, range 3 = 55 MHz | ✔ RM0456 §10.5.4, Table 114 |
+| `PWR_VOSR.VOS` (bits 17:16): `00` = range 4 (reset), `01` = range 3. `VOSRDY` = bit 15 | ✔ RM0456 §10.10.4 |
+
+So range 4 is ruled out by USB alone, even though 24 MHz itself would fit in it. Range 3 is the lowest-power range that works.
+
+### Wait states: none needed
+
+| HCLK 24 MHz | Range 3 | Range 4 (for comparison) | Source |
 |---|---|---|---|
-| 4 (reset) | 4 MHz | 0 | ✔ HAL |
-| 2 | 16 MHz | 1 | ✔ HAL `RCC_SetFlashLatencyFromMSIRange` |
-| 1 | 24 MHz | 2 | ✔ HAL |
-| 0 | 48 MHz | not allowed in range 4 (needs range 1–3) | ✔ HAL |
+| Flash (`FLASH_ACR.LATENCY`) | **0 WS** (≤ 24 MHz) | 1 WS (0 WS only ≤ 12 MHz) | ✔ RM0456 Table 54 |
+| SRAM (`RAMCFG_MxCR.WSC`) | **0 WS** (≤ 55 MHz) | 1 WS (0 WS only ≤ 16 MHz) | ✔ RM0456 Table 47 |
 
-Recommendation: use **24 MHz** (range 1). It sits well above the minimum, and the TRDT value is `0x8`.
+Both reset to 0 WS, so `FLASH_ACR` and `RAMCFG` are never written. 24 MHz sits exactly on the range-3 flash limit: going any higher (for example MSIS 48 MHz) would need `LATENCY = 1` first.
+
+### MSIS range register
+
+`RCC_ICSCR1` (✔ RM0456 §11.8.2, offset `0x008`, reset `0x440X_XXXX`):
+
+| Field | Bits | Use |
+|---|---|---|
+| `MSISRANGE` | 31:28 | `0001` = range 1, about 24 MHz. Reset `0100` = 4 MHz. |
+| `MSIKRANGE` | 27:24 | MSIK range (see below). Reset `0100` = 4 MHz. |
+| `MSIRGSEL` | 23 | Must be **1**. At 0 (reset) both ranges come from `RCC_CSR` instead, and a write to `MSISRANGE` has no effect. Writing 0 does nothing. |
+| `MSIBIAS` | 22 | Left at 0 (continuous bias, best accuracy). |
+| `MSICALx` | 21:0 | Factory calibration, read-only. |
+
+Rule from the same page: `MSISRANGE` must not change while MSIS is on but not ready (`MSISON = 1`, `MSISRDY = 0`).
+
+**`MSIRGSEL` switches MSIS *and* MSIK together.** The U5 has two outputs from the MSI oscillators:
+
+- **MSIS** (S = system) drives SYSCLK, so HCLK, the buses and TIM2.
+- **MSIK** (K = kernel) is a separate clock that some peripherals can select as their kernel clock, for example U(S)ART, I2C, SPI, LPTIM, ADC or the octo-SPI. It never drives the CPU.
+
+There's no separate select bit for each: `MSIRGSEL = 1` makes the chip take **both** `MSISRANGE` and `MSIKRANGE` from `ICSCR1`. `init_hardware_clock()` does a read-modify-write that only changes `MSISRANGE`, so `MSIKRANGE` keeps its reset value `0100` (4 MHz). Before the write, MSIK came from `RCC_CSR.MSIKSRANGE`, whose reset value is also 4 MHz, so in practice nothing changes for MSIK.
+
+It matters only if a later driver picks MSIK as a kernel clock: it must then set `MSIKRANGE` in `ICSCR1`, not `MSIKSRANGE` in `RCC_CSR`, because `MSIRGSEL` stays at 1 until the next reset or Standby. None of the current drivers use MSIK.
+
+Two smaller side effects of the read-modify-write:
+- `MSIBIAS` and the calibration bits are written back unchanged. The calibration bits are read-only, so this is harmless.
+- From Stop mode, the MSIS range is kept unless it is above 24 MHz (RM0456 §11.8.2). 24 MHz is exactly the limit, so the chip wakes up at the same speed.
+
+### Sequence
 
 ```text
-clock_init():
-    RCC.AHB3ENR  |= PWREN                       // bit 2              ✔ CMSIS (AHB3ENR @ 0x94)
+init_hardware_clock() -> bool:                  // first call in main(), before init_timer()
+    // 1. Voltage first (RM0456 §10.5.4 order: VOS, wait states, then frequency)
+    RCC_AHB3ENR |= PWREN;  (void)RCC_AHB3ENR    // PWR clock on; read back so it's running
+    PWR_VOSR.VOS = 01 (range 3)
+    wait until PWR_VOSR.VOSRDY                  // timeout → return false, stay at 4 MHz
 
-    // ⚠ RM: confirm USB OTG_FS is allowed in VOS range 4 (PWR chapter,
-    //        voltage-scaling table). If not: set PWR.VOSR.VOS (bits 17:16)
-    //        to range 2 or 1 and wait for VOSR.VOSRDY (bit 15) BEFORE
-    //        raising the clock.
+    // 2. Wait states: nothing to do (0 WS covers range 3 at 24 MHz)
 
-    // Raise wait states BEFORE raising the frequency
-    FLASH.ACR = (FLASH.ACR & ~LATENCY) | 2      // LATENCY @ bit 0    ✔ CMSIS
-    wait until (FLASH.ACR & LATENCY) == 2
+    // 3. Frequency
+    wait until RCC_CR.MSISRDY                   // range must not change while not ready
+    RCC_ICSCR1 = (ICSCR1 & ~MSISRANGE) | MSISRANGE_24MHZ | MSIRGSEL
+    wait until RCC_CR.MSISRDY                   // oscillator settled on the new range
 
-    RCC.ICSCR1 = (ICSCR1 & ~MSISRANGE) | (1 << 28)   // MSISRANGE @ 28 ✔ CMSIS
-               | MSIRGSEL                            // bit 23: use ICSCR1 range ✔ CMSIS
-    // ⚠ RM: check whether to wait for RCC_CR.MSISRDY after the change
-
-    update TIM2_INPUT_CLOCK_HZ in timer.c to 24'000'000
-    (TIM2 counts at 1 kHz, so PSC becomes 24'000'000 / 1'000 - 1 = 23'999,
-     which fits the 16-bit prescaler and keeps the 1 ms tick)
-    // Do this in the same change as the clock switch: every USB timeout
-    // is a deadline_t, and at the old PSC they all expire 6× too early.
+    hclk_hz = 24 MHz;  return true
 ```
 
-> If you ever go **down** in frequency, change the order: lower the clock first, then the wait states.
+- **Timeouts:** TIM2 isn't running yet, so `deadline_t` can't be used. The waits count 100 000 loop passes, well over 10 ms at 4 MHz. The hardware needs microseconds.
+- **On failure** the chip stays at 4 MHz. Buttons and the timer work, USB doesn't, so `main()` skips `init_usb()`.
+- **TIM2:** `init_timer()` computes `PSC = hardware_clock_hz() / 1000 - 1`: 23 999 at 24 MHz, 3 999 if the clock stayed at 4 MHz. Both fit the 16-bit prescaler, and the tick stays 1 ms either way.
+
+> If you ever go **down** in frequency, reverse the order: lower the clock, then the wait states, then the voltage.
 
 ---
 
@@ -309,7 +347,7 @@ clock_init():
 
 ```text
 usb_power_init():
-    RCC.AHB3ENR |= PWREN                        // already done in clock_init
+    RCC.AHB3ENR |= PWREN                        // already done in init_hardware_clock, harmless
     PWR.SVMCR   |= USV                          // bit 28, SVMCR @ 0x10   ✔ CMSIS
                                                 // = HAL_PWREx_EnableVddUSB ✔ HAL
     // Optional: UVMEN (bit 24) enables the VDDUSB monitor, then wait for UVMRDY ⚠ RM
@@ -922,7 +960,7 @@ Common failures, roughly in order of likelihood:
 ### In this repo
 
 - **`mcu/src/drivers/usb_mock.c`**: the whole guide as one file. It compiles with `-Wall -Wextra -Werror -Wconversion` for the Cortex-M33, but it has never run, isn't in CMake, and defines `init_usb()` just like `usb.c`. It predates the `usb.c`/`hid.c` split and has these known problems, all fixed in the pseudocode above:
-  - The TIM2 timeouts expire 6× too early once HCLK is 24 MHz, unless `TIM2_INPUT_CLOCK_HZ` changes with it (§2).
+  - It assumes a `clock_init()` that it never defines, written before the RM showed that USB needs VOS range 3 (§2).
   - `ep1_activate()` doesn't flush TX FIFO 1 (§7.2).
   - Arming EP1 from the main loop isn't protected against the ISR (§9).
   - `init_usb()` returns `void`, so a start-up timeout leaves the device disconnected with nothing reported.

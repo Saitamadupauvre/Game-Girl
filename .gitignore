@@ -4,3 +4,4 @@ build-mcu/
 .clangd
 cmake/
 .cache
+docs/hardware/rm0456-stm32u5-series.pdf

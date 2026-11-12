@@ -26,11 +26,11 @@ This replaces `usb_TODOS.md` at the repository root.
 
 ## 1. Clock (§2): blocks USB on the board
 
-- [ ] Add a clock module with `clock_init()`: MSIS range 1 → 24 MHz, flash wait states raised **before** the clock goes up. (Nothing exists yet: `clock_init()` is only referenced in `usb_mock.c`.)
-- [ ] Add the `FLASH_ACR`, `RCC_ICSCR1` and `PWR_VOSR` definitions to `stm32u575_regs.h`.
-- [ ] Check in RM0456 whether USB works in VOS range 4. If not, raise VOS first.
-- [ ] Change `TIM2_INPUT_CLOCK_HZ` to 24 MHz **in the same change** (prescaler 23 999). Otherwise every USB timeout expires 6× too early.
-- [ ] Call `clock_init()` before `init_timer()` in `main.c`.
+- [x] Add a clock module: `init_hardware_clock()` in `drivers/hardware_clock.c` raises VOS to range 3, then MSIS to range 1 (24 MHz). No wait-state change: range 3 at 24 MHz is 0 WS for flash (RM0456 Table 54) and SRAM (Table 47).
+- [x] Add the `RCC_ICSCR1`, `RCC_CR.MSISON/MSISRDY` and `PWR_VOSR` definitions to `stm32u575_regs.h`. (`FLASH_ACR` not needed.)
+- [x] Check in RM0456 whether USB works in VOS range 4: **no**. OTG_FS works in range 1–3 only (§10.5.4 note 12), and HSI48 is only allowed divided by 2 in range 4 (Table 115).
+- [x] TIM2 follows the clock: `timer.c` computes the prescaler from `hardware_clock_hz()` (23 999 at 24 MHz, 3 999 if the clock init failed), so it can't drift from the real speed.
+- [x] Call `init_hardware_clock()` before `init_timer()` in `main.c`. `init_usb()` is skipped if it fails.
 
 ## 2. `hid.c`: pure logic, testable now without the board
 
@@ -60,17 +60,17 @@ This replaces `usb_TODOS.md` at the repository root.
 
 ## 4. `usb.c`: interrupts and transfers (§6, §7.2, §9)
 
-- [x] `txfifo_write()`, `rxfifo_read()`, and the TX/RX flush helpers as `static` functions (§6.6). (`usb_txfifo_write()` and `usb_rxfifo_read()` reviewed. The build stays red with `-Wunused-function` until they have callers.)
-- [ ] `OTG_FS_IRQHandler` dispatching to the event handlers (§6).
-- [ ] USB reset handler, with `DAINTMSK =` (not `|=`) and `hid_reset()` (§6.1).
-- [ ] Speed-negotiated handler: EP0 64 bytes, `CGINAK`, `TRDT = 0x8` for 24 MHz (§6.2).
+- [x] `txfifo_write()`, `rxfifo_read()`, and the TX/RX flush helpers as `static` functions (§6.6). (`usb_txfifo_write()` and `usb_rxfifo_read()` reviewed. All helpers now have callers and the `-Werror` build is clean.)
+- [x] `OTG_FS_IRQHandler` dispatching to the event handlers (§6). (Suspend and wakeup only clear their flags for now.)
+- [x] USB reset handler, with `DAINTMSK =` (not `|=`) and `hid_reset()` (§6.1). (`usb_on_reset()`, which also calls `ep1_deactivate()`.)
+- [x] Speed-negotiated handler: EP0 64 bytes, `CGINAK`, `TRDT = 0x8` for 24 MHz (§6.2). (`usb_on_enum_done()`. `USB_TRDT_24MHZ` must change if `clock_init()` picks another HCLK.)
 - [x] RX FIFO handler: SETUP and OUT data (§6.3). (`usb_on_rxfifo()`. It isn't called yet: that's the ISR's job.)
-- [ ] OUT endpoint handler: re-arm EP0 **before** `apply_setup()` (§6.4).
-- [ ] IN endpoint handler: clear flags, `ep1_busy = false` on EP1 `XFRC` (§6.5).
+- [x] OUT endpoint handler: re-arm EP0 **before** `apply_setup()` (§6.4). (`usb_on_out_ep()`.)
+- [x] IN endpoint handler: clear flags, `ep1_busy = false` on EP1 `XFRC` (§6.5). (`usb_on_in_ep()`.)
 - [x] EP0 helpers: `ep0_send`, `ep0_send_zlp`, `ep0_stall`, `ep0_arm_setup`, `ep0_arm_status_out` (§6.6). (All five are in `usb.c`, reviewed except `ep0_send_zlp`, which was added after the last review.)
-- [ ] `apply_setup()`, `ep1_activate()` (with the TX FIFO 1 flush) and `ep1_deactivate()` (§7.2).
-- [ ] `usb_hid_send_if_changed()` with the idle-rate, `report_pending` and IRQ-masking fixes (§9).
-- [ ] Call `usb_hid_send_if_changed(&inputs)` in the main loop in `main.c`.
+- [x] `apply_setup()`, `ep1_activate()` (with the TX FIFO 1 flush) and `ep1_deactivate()` (§7.2). (`apply_setup()` is called from the OUT endpoint handler, which doesn't exist yet.)
+- [x] `usb_hid_send_if_changed()` with the idle-rate, `report_pending` and IRQ-masking fixes (§9). (No `suspended` flag: a report armed during suspend just waits for the next poll.)
+- [x] Call `usb_hid_send_if_changed(&inputs)` in the main loop in `main.c`. (Inside the 1 ms input block, right after `update_input_state()`.)
 
 ## 5. Build and boot infrastructure: blocks flashing
 
