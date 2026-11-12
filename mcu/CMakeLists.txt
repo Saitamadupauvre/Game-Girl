@@ -2,6 +2,7 @@
 # flashable ELF. Compile the current firmware sources as cross-compiled objects.
 add_library(gamegirl-firmware-objects OBJECT
     src/main.c
+    src/drivers/hardware_clock.c
     src/drivers/gpio.c
     src/drivers/timer.c
     src/common/timer_api.c
