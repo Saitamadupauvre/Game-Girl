@@ -9,6 +9,7 @@
  * TIM2 is not running yet, so the waits below count loop passes instead of milliseconds.
  * At 4 MHz this is well over 10 ms, far longer than VOS or MSIS need (microseconds).
  */
+
 #define CLOCK_READY_SPINS   100000UL
 
 #define MSIS_RESET_HZ       4000000UL   // Range 4, the reset value
@@ -60,7 +61,6 @@ static bool set_msis_24mhz(void)
 
 bool init_hardware_clock(void)
 {
-    // Voltage first, then frequency. Going down would be the reverse order (RM0456 10.5.4)
     if (!raise_core_voltage() || !set_msis_24mhz()) {
         return false;
     }
