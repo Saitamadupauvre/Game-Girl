@@ -1,8 +1,8 @@
 
+#include "hardware_clock.h"
 #include "timer.h"
 #include "timer_api.h"
 #include "stm32u575_regs.h"
-
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -11,16 +11,12 @@
 /*
  * TIM2 configuration
  *
- * TIM2 input clock: 4 MHz
+ * TIM2 input clock: hardware_clock_hz(), 24 MHz (or 4 MHz if init_hardware_clock() failed)
  * Desired counter frequency: 1 kHz (1 ms per tick)
  * Auto-reload: UINT32_MAX (continuous 32-bit free-running timebase)
  */
 
-#define TIM2_INPUT_CLOCK_HZ       4000000UL
 #define TIM2_COUNTER_CLOCK_HZ     1000UL
-
-#define TIM2_PRESCALER \
-    ((TIM2_INPUT_CLOCK_HZ / TIM2_COUNTER_CLOCK_HZ) - 1UL)
 
 #define TIM2_AUTO_RELOAD          UINT32_MAX
 
@@ -34,12 +30,13 @@ static void configure_tim2(void)
     TIM2_CR1 &= ~TIM_CR1_CEN;   // Stop TIM2 while configuring
 
     /*
-     * 4 MHz / (3999 + 1) = 1 kHz
+     * 24 MHz / (23999 + 1) = 1 kHz (4 MHz / (3999 + 1) if the clock stayed at reset)
      *
-     * Therefore each counter tick represents 1 ms.
+     * Therefore each counter tick represents 1 ms. PSC is 16 bits, so the input clock must stay
+     * below 65.536 MHz for a 1 kHz tick.
      */
-    
-    TIM2_PSC = TIM2_PRESCALER;
+
+    TIM2_PSC = (hardware_clock_hz() / TIM2_COUNTER_CLOCK_HZ) - 1UL;
 
     TIM2_ARR = TIM2_AUTO_RELOAD;    // 32-bit free-running up-counter to UINT32_MAX
     TIM2_CNT = 0u;                  // Start point of our counter
