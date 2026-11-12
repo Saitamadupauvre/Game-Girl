@@ -3,6 +3,7 @@
 #include "timer_api.h"
 #include "cpu.h"
 #include "usb.h"
+#include "hid.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -26,11 +27,26 @@ enum {
     USB_SETUP_PACKET_SIZE = 8,
     USB_SETUP_PACKET_NBR = 3,
     USB_EP0_MAX_PACKET_SIZE = 64,
+
+    USB_HID_EP = 1,                 // Interrupt IN endpoint 0x81
+    USB_HID_TX_FIFO = 1,            // Uses DIEPTXF1
+    USB_HID_EP_MAX_PACKET_SIZE = 8, // Must match wMaxPacketSize in the endpoint descriptor (hid.c)
+
+    USB_TRDT_24MHZ = 0x8,           // GUSBCFG.TRDT for HCLK 24-27.7 MHz. Must follow clock_init()
+
+    USB_IDLE_RATE_UNIT_MS = 4,      // SET_IDLE counts in 4 ms units. HID 1.11 §7.2.4
 };
 
 _Static_assert(USB_FIFO_END <= 320, "FIFOs exceed USB RAM");
 
 static uint8_t setup_pkt[USB_SETUP_PACKET_SIZE];
+
+static hid_state_t hid_state;       // Written by apply_setup() in the ISR
+static volatile bool ep1_busy;      // A report is armed on EP1 and not yet sent
+static volatile bool report_pending; // Send the current report even if the buttons did not change
+
+static hid_report_t last_sent;      // Main loop only: the last report armed on EP1
+static deadline_t idle_deadline;    // Main loop only: when the idle rate asks for a resend
 
 
 /* Waiting */
@@ -241,7 +257,68 @@ static bool ep0_send(const uint8_t *data, uint16_t data_len)
 
 static void ep0_send_zlp(void)
 {
-    ep0_send(NULL, 0, 0);
+    (void)ep0_send(NULL, 0);
+}
+
+
+/* Control requests and EP1 */
+
+static void ep1_activate(void)
+{
+    (void)tx_fifo_flush(USB_HID_TX_FIFO);   // Drops a report left from an earlier configuration
+
+    OTG_DIEPCTL(USB_HID_EP) = OTG_DIEPCTL_USBAEP            // Endpoint active in this configuration
+                            | OTG_DIEPCTL_EPTYP_INTR        // Interrupt transfers
+                            | ((uint32_t)USB_HID_TX_FIFO << OTG_DIEPCTL_TXFNUM_Pos)
+                            | OTG_DIEPCTL_SD0PID            // First packet is DATA0
+                            | OTG_DIEPCTL_SNAK              // NAK the host until a report is armed
+                            | USB_HID_EP_MAX_PACKET_SIZE;   // MPSIZ
+
+    OTG_DAINTMSK |= OTG_DAINT_IEP(USB_HID_EP);
+    ep1_busy = false;
+    report_pending = true;  // Send the current state straight away, even if unchanged
+}
+
+static void ep1_deactivate(void)
+{
+    if ((OTG_DIEPCTL(USB_HID_EP) & OTG_DIEPCTL_EPENA) != 0u) {
+        OTG_DIEPCTL(USB_HID_EP) |= OTG_DIEPCTL_EPDIS | OTG_DIEPCTL_SNAK;   // Aborts an armed report
+    }
+
+    OTG_DIEPCTL(USB_HID_EP) &= ~OTG_DIEPCTL_USBAEP;
+    OTG_DAINTMSK &= ~OTG_DAINT_IEP(USB_HID_EP);
+    ep1_busy = false;
+}
+
+/* Runs a SETUP packet through hid_handle_setup(), then applies the answer to the hardware. */
+static void apply_setup(const uint8_t setup[USB_SETUP_PACKET_SIZE])
+{
+    const uint8_t old_config = hid_state.configuration;
+    const usb_reply_t reply = hid_handle_setup(setup, &hid_state);
+
+    // Written now, before the status stage: the core only starts using the new address after it
+    OTG_DCFG = (OTG_DCFG & ~OTG_DCFG_DAD_Msk) | ((uint32_t)hid_state.address << OTG_DCFG_DAD_Pos);
+
+    if (hid_state.configuration != old_config) {
+        if (hid_state.configuration == 1u) {
+            ep1_activate();
+        } else {
+            ep1_deactivate();
+        }
+    }
+
+    switch (reply.type) {
+        case USB_REPLY_DATA:
+            (void)ep0_send(reply.data, reply.len);
+            break;
+        case USB_REPLY_ZLP:
+            ep0_send_zlp();
+            break;
+        case USB_REPLY_STALL:
+        default:
+            ep0_stall();
+            break;
+    }
 }
 
 /* Interrupt event handlers */
@@ -266,6 +343,164 @@ static void usb_on_rxfifo(void)
     }
 
     OTG_GINTMSK |= OTG_GINTMSK_RXFLVLM; // Unmasks RXFLVLM again
+}
+
+/* The host held the bus in reset: forget the address and configuration, wait for SETUP on EP0. */
+static void usb_on_reset(void)
+{
+    OTG_DCTL &= ~OTG_DCTL_RWUSIG;   // Stop any remote wakeup signalling
+    (void)tx_fifo_flush(OTG_GRSTCTL_TXFNUM_ALL);
+
+    ep1_deactivate();
+
+    for (uint8_t i = 0; i < USB_EP_COUNT; i++) {
+        OTG_DIEPINT(i) = OTG_DIEPINT_CLEAR_ALL;
+        OTG_DIEPCTL(i) &= ~OTG_DIEPCTL_STALL;
+        OTG_DOEPINT(i) = OTG_DOEPINT_CLEAR_ALL;
+        OTG_DOEPCTL(i) &= ~OTG_DOEPCTL_STALL;
+        OTG_DOEPCTL(i) |= OTG_DOEPCTL_SNAK;
+    }
+
+    // Plain `=`: only EP0 can interrupt until SET_CONFIGURATION activates EP1
+    OTG_DAINTMSK = OTG_DAINT_OEP(0) | OTG_DAINT_IEP(0);
+    OTG_DOEPMSK |= OTG_DOEPINT_STUP | OTG_DOEPINT_XFRC;
+    OTG_DIEPMSK |= OTG_DIEPINT_XFRC | OTG_DIEPINT_TOC;
+
+    OTG_DCFG &= ~OTG_DCFG_DAD_Msk;  // Back to address 0
+    hid_reset(&hid_state);
+    report_pending = false;
+
+    ep0_arm_setup();
+}
+
+/* Reset is over and full speed is negotiated: EP0 can be used. */
+static void usb_on_enum_done(void)
+{
+    OTG_DIEPCTL(0) &= ~OTG_DIEPCTL_EP0_MPSIZ_Msk;  // MPSIZ = 0b00, EP0 max packet 64 bytes
+    OTG_DCTL |= OTG_DCTL_CGINAK;                    // Clear global IN NAK
+
+    OTG_GUSBCFG = (OTG_GUSBCFG & ~OTG_GUSBCFG_TRDT_Msk) | ((uint32_t)USB_TRDT_24MHZ << OTG_GUSBCFG_TRDT_Pos);
+}
+
+static void usb_on_out_ep(void)
+{
+    if ((OTG_DAINT & OTG_DAINT_OEP(0)) == 0u) {
+        return;     // EP0 is the only OUT endpoint
+    }
+
+    const uint32_t flags = OTG_DOEPINT(0);
+    OTG_DOEPINT(0) = flags;     // Write-1-to-clear every flag that was read
+
+    if ((flags & OTG_DOEPINT_STUP) != 0u) {
+        ep0_arm_setup();            // Re-arm first: apply_setup() may arm the status OUT stage
+        apply_setup(setup_pkt);
+    }
+    // XFRC alone means the status OUT ZLP arrived: nothing to do
+}
+
+static void usb_on_in_ep(void)
+{
+    const uint32_t pending = OTG_DAINT;
+
+    if ((pending & OTG_DAINT_IEP(0)) != 0u) {
+        OTG_DIEPINT(0) = OTG_DIEPINT(0);    // EP0 reply sent: just clear the flags
+    }
+
+    if ((pending & OTG_DAINT_IEP(USB_HID_EP)) != 0u) {
+        const uint32_t flags = OTG_DIEPINT(USB_HID_EP);
+        OTG_DIEPINT(USB_HID_EP) = flags;
+
+        if ((flags & OTG_DIEPINT_XFRC) != 0u) {
+            ep1_busy = false;               // The host collected the report
+        }
+    }
+}
+
+void OTG_FS_IRQHandler(void)
+{
+    const uint32_t sts = OTG_GINTSTS & OTG_GINTMSK;
+
+    if ((sts & OTG_GINTSTS_USBRST) != 0u) {
+        usb_on_reset();
+        OTG_GINTSTS = OTG_GINTSTS_USBRST;   // GINTSTS flags are write-1-to-clear
+    }
+
+    if ((sts & OTG_GINTSTS_ENUMDNE) != 0u) {
+        usb_on_enum_done();
+        OTG_GINTSTS = OTG_GINTSTS_ENUMDNE;
+    }
+
+    // Before OEPINT: the SETUP bytes must be popped before STUP is handled
+    if ((sts & OTG_GINTSTS_RXFLVL) != 0u) {
+        usb_on_rxfifo();    // Popping GRXSTSP clears RXFLVL
+    }
+
+    if ((sts & OTG_GINTSTS_OEPINT) != 0u) {
+        usb_on_out_ep();    // Cleared through DOEPINT
+    }
+
+    if ((sts & OTG_GINTSTS_IEPINT) != 0u) {
+        usb_on_in_ep();     // Cleared through DIEPINT
+    }
+
+    // Suspend and wakeup need no action yet, but an unmasked flag left set would retrigger forever
+    if ((sts & OTG_GINTSTS_USBSUSP) != 0u) {
+        OTG_GINTSTS = OTG_GINTSTS_USBSUSP;
+    }
+
+    if ((sts & OTG_GINTSTS_WKUINT) != 0u) {
+        OTG_GINTSTS = OTG_GINTSTS_WKUINT;
+    }
+}
+
+
+/* Report sending (main loop) */
+
+static void usb_irq_disable(void)
+{
+    NVIC_ICER2 = 1UL << (OTG_FS_IRQ_NUM - 64U);
+    cpu_dsb();  // The mask must take effect before the next instruction, not a few cycles later
+    cpu_isb();
+}
+
+static void usb_irq_enable(void)
+{
+    NVIC_ISER2 = 1UL << (OTG_FS_IRQ_NUM - 64U);
+}
+
+void usb_hid_send_if_changed(const input_state_t *inputs)
+{
+    if (inputs == NULL) {
+        return;
+    }
+
+    const hid_report_t report = hid_pack(inputs->current);
+    const uint8_t bytes[HID_REPORT_SIZE] = {report.buttons, report.hat};
+
+    // The ISR writes hid_state, ep1_busy and DIEPCTL(1) (reset, SET_CONFIGURATION), so all of
+    // the check-and-arm runs with the USB interrupt masked
+    usb_irq_disable();
+
+    hid_state.last_report[0] = bytes[0];    // GET_REPORT returns the current state
+    hid_state.last_report[1] = bytes[1];
+
+    const bool changed = (report.buttons != last_sent.buttons) || (report.hat != last_sent.hat);
+    const uint8_t rate = hid_state.idle_rate;
+    const bool idle_due = (rate != 0u) && timer_expired(&idle_deadline);   // Rate 0 = never resend
+
+    if ((hid_state.configuration == 1u) && !ep1_busy
+            && (changed || idle_due || report_pending)
+            && usb_in_packet_tx(USB_HID_EP, bytes, HID_REPORT_SIZE)) {
+        ep1_busy = true;    // The IN handler clears it when the host collects the report
+        report_pending = false;
+        last_sent = report;
+
+        if (rate != 0u) {
+            timer_start(&idle_deadline, (uint32_t)rate * USB_IDLE_RATE_UNIT_MS);
+        }
+    }
+
+    usb_irq_enable();
 }
 
 
