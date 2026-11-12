@@ -1,0 +1,96 @@
+# USB TODO
+
+Goal: the STM32U575 enumerates as a **USB HID gamepad** on the Raspberry Pi (spec §7.1), so Linux exposes it as `/dev/input/eventX`. Branch: `feat/mcu/usb`.
+
+Implementation guide: [`docs/mcu/drivers/usb.md`](../mcu/drivers/usb.md). Section numbers below (§n) refer to it.
+Reference implementation (compare, don't copy): `mcu/src/drivers/usb_mock.c`.
+
+This replaces `usb_TODOS.md` at the repository root.
+
+## Done
+
+- [x] `stm32u575_regs.h` defines every OTG_FS, PWR, GPIOA, RCC and `NVIC_ISER2` register the guide uses in §3–§9.
+- [x] `usb.h` declares `init_usb()`, `usb_hid_send_if_changed()`, `OTG_FS_IRQHandler()` and the `usb_reply_t` reply type.
+- [x] `usb.c` is in `mcu/CMakeLists.txt`, and `main.c` calls `init_usb()`.
+- [x] `usb.c` turns on HSI48 and the OTG clock, soft-resets the core, then forces device mode with a 25 ms wait (correct order).
+- [x] Code layout decided: `drivers/usb.c` (registers) + `services/hid.c` (pure logic) + `tests/test_hid.c`. No `usb/` folder, no `fifo.c`.
+- [x] Guide updated for the layout, the reply type and the bugs found in review.
+
+## 0. Housekeeping
+
+- [x] Delete the root `usb_TODOS.md` now that this file replaces it, and tick the reset-order item in `TODOs.md` (it's already correct in `usb.c`).
+- [x] `hid.h`: `hid_report_t` was renamed `usb_report_t`. The guide and `usb_mock.c` still say `hid_report_t`, and `usb_mock.c` no longer compiles. Pick one name, and keep the `hid_` prefix if the type lives in `hid.h`.
+- [x] `hid.h`: `hid_reply_t` is an empty struct, which isn't valid ISO C (GCC only accepts it as an extension). `usb_reply_t` in `usb.h` already covers the reply, so remove `hid_reply_t` or give it a purpose.
+- [x] Remove the commented-out `clear_rx_fifo_reg()` in `usb.c`. The RX flush gets rewritten in §5 with an `AHBIDL` wait.
+- [x] Add `NVIC_ICER2` (`0xE000E188`) to `stm32u575_regs.h`, next to `NVIC_ISER2`. It's needed for §9.
+
+## 1. Clock (§2): blocks USB on the board
+
+- [x] Add a clock module: `init_hardware_clock()` in `drivers/hardware_clock.c` raises VOS to range 3, then MSIS to range 1 (24 MHz). No wait-state change: range 3 at 24 MHz is 0 WS for flash (RM0456 Table 54) and SRAM (Table 47).
+- [x] Add the `RCC_ICSCR1`, `RCC_CR.MSISON/MSISRDY` and `PWR_VOSR` definitions to `stm32u575_regs.h`. (`FLASH_ACR` not needed.)
+- [x] Check in RM0456 whether USB works in VOS range 4: **no**. OTG_FS works in range 1–3 only (§10.5.4 note 12), and HSI48 is only allowed divided by 2 in range 4 (Table 115).
+- [x] TIM2 follows the clock: `timer.c` computes the prescaler from `hardware_clock_hz()` (23 999 at 24 MHz, 3 999 if the clock init failed), so it can't drift from the real speed.
+- [x] Call `init_hardware_clock()` before `init_timer()` in `main.c`. `init_usb()` is skipped if it fails.
+
+## 2. `hid.c`: pure logic, testable now without the board
+
+- [x] Create `mcu/src/services/hid.c` and add it to `mcu/CMakeLists.txt`.
+- [x] Define `hid_state_t` (address, configuration, idle rate, last report) and `hid_reset()` (§7.1).
+- [x] Descriptors (§8): device, 34-byte configuration block, strings, 55-byte HID report descriptor. VID/PID is `0x1209:0x0001` (pid.codes test PID); strings are "Game Girl" / serial `000001`.
+- [x] `hid_pack()` (§9).
+- [x] `hid_handle_setup()` returning `usb_reply_t`, already clipped to `wLength` (§7.1).
+- [x] Create `mcu/tests/test_hid.c` and a `gamegirl-hid-tests` target in `mcu/tests/CMakeLists.txt`, modelled on `gamegirl-input-tests`. Cover the test list in §9. (Passes under ctest.)
+- [x] Button layout decided (§8.5): standard Linux gamepad named by position, 8 buttons (B, A, X, Y, L, R, Select, Start) plus the D-pad as a hat switch, no Menu button. Report is 2 bytes.
+- [ ] Ship a mapping for the Pi so SDL / RetroArch recognise the pad (an `SDL_GAMECONTROLLERCONFIG` string or a RetroArch autoconfig keyed on the VID/PID). Check with `evtest` and `udevadm info` first.
+- [ ] Check the report descriptor with `hid-decode` and the descriptors with `lsusb -v` once on the board.
+
+## 3. `usb.c`: start-up (§3–§5), compile-check only
+
+- [x] Add timeouts (`deadline_t`) to the `HSI48RDY`, `AHBIDL` and `CSRST` waits.
+- [x] Check `GINTSTS.CMOD == 0` after the 25 ms device-mode wait (§4).
+- [x] Power: `RCC_AHB3ENR.PWREN`, then `PWR_SVMCR.USV` (§3).
+- [x] Pins: PA11/PA12 alternate function, AF10, very-high speed (§3).
+- [x] Kernel clock: `RCC_CCIPR1.ICLKSEL = HSI48` (§3).
+- [x] `GUSBCFG.PHYSEL` before the soft reset, and `GCCFG.PWRDWN` after it (§4).
+- [x] Device setup (§5), first part in `init_usb_device()`: `GCCFG.VBDEN` (VBUS sensing on PA9, so no `BVALOEN`/`BVALOVAL` override), `SDIS`, `PCGCCTL`, `DCFG` (full speed, address 0).
+- [x] Device setup (§5), rest: FIFO sizes (`GRXFSIZ`, `DIEPTXF0`, `DIEPTXF1`), TX and RX flushes with `AHBIDL` waits, endpoint clear loop, interrupt masks, `GAHBCFG`, NVIC, clear `SDIS` last.
+- [x] FIFO layout decided (§5): RX 64, TX0 32, TX1 16 words, at RX 0–63, TX0 64–95, TX1 96–111 (112 of 320 words). Use named constants and compute each start address from the previous start + depth. `usb_mock.c` still uses 128 / 64 / 64.
+- [?] Check in RM0456 before relying on those sizes: the minimum depth for `DIEPTXFx` (TX1 = 16 assumes it is ≤ 16). RX must stay ≥ 28 words (16 + 2 + 10), because SETUP packets can't be NAKed. (Confirmed in RM0456: the 320-word total, from the dedicated 1.25 KB RAM in the features list, and 6 device endpoints including EP0 in Table 749. Use 6 for the endpoint loop count.)
+- [?] Decide how `init_usb()` reports failure (it returns `void` today, so a timeout is silent). `init_usb_device()` returns `bool` but `init_usb()` ignores it; check it once the flushes can time out, or make it `void`. (`init_hardware_clock()` already returns `bool`, and `main.c` skips `init_usb()` when it fails. The same pattern would fit here.)
+
+## 4. `usb.c`: interrupts and transfers (§6, §7.2, §9)
+
+- [x] `txfifo_write()`, `rxfifo_read()`, and the TX/RX flush helpers as `static` functions (§6.6). (`usb_txfifo_write()` and `usb_rxfifo_read()` reviewed. All helpers now have callers and the `-Werror` build is clean.)
+- [x] `OTG_FS_IRQHandler` dispatching to the event handlers (§6). (Suspend and wakeup only clear their flags for now.)
+- [x] USB reset handler, with `DAINTMSK =` (not `|=`) and `hid_reset()` (§6.1). (`usb_on_reset()`, which also calls `ep1_deactivate()`.)
+- [x] Speed-negotiated handler: EP0 64 bytes, `CGINAK`, `TRDT = 0x8` for 24 MHz (§6.2). (`usb_on_enum_done()`. `USB_TRDT_24MHZ` must change if `init_hardware_clock()` picks another HCLK.)
+- [x] RX FIFO handler: SETUP and OUT data (§6.3). (`usb_on_rxfifo()`. It isn't called yet: that's the ISR's job.)
+- [x] OUT endpoint handler: re-arm EP0 **before** `apply_setup()` (§6.4). (`usb_on_out_ep()`.)
+- [x] IN endpoint handler: clear flags, `ep1_busy = false` on EP1 `XFRC` (§6.5). (`usb_on_in_ep()`.)
+- [x] EP0 helpers: `ep0_send`, `ep0_send_zlp`, `ep0_stall`, `ep0_arm_setup`, `ep0_arm_status_out` (§6.6). (All five are in `usb.c`, reviewed except `ep0_send_zlp`, which was added after the last review.)
+- [x] `apply_setup()`, `ep1_activate()` (with the TX FIFO 1 flush) and `ep1_deactivate()` (§7.2). (`apply_setup()` is called from the OUT endpoint handler, which doesn't exist yet.)
+- [x] `usb_hid_send_if_changed()` with the idle-rate, `report_pending` and IRQ-masking fixes (§9). (No `suspended` flag: a report armed during suspend just waits for the next poll.)
+- [x] Call `usb_hid_send_if_changed(&inputs)` in the main loop in `main.c`. (Inside the 1 ms input block, right after `update_input_state()`.)
+
+## 5. Build and boot infrastructure: blocks flashing
+
+- [ ] Startup code (vector table with `OTG_FS_IRQHandler` at IRQ 73, `Reset_Handler`) and a linker script.
+- [ ] ELF and BIN outputs, plus OpenOCD flash, reset and erase targets.
+- [x] Build with `GAMEGIRL_BUILD_MCU=ON` and `-Werror`, and fix whatever shows up. (`cmake --build build-mcu` is clean for the current sources; re-run it as `hid.c`, the clock module and the ISR land.)
+
+## 6. Bring-up on the board (§10)
+
+- [ ] The connector's VBUS net must reach PA9 (`OTG_FS_VBUS`). `usb.c` relies on `VBDEN` sensing with no software Bvalid override, so without that wiring the core never connects. Check the schematic, or fall back to the `BVALOEN`/`BVALOVAL` override as in `usb_mock.c`.
+- [x] Leave PA9 unconfigured in `enable_usb_pins()` so the VBUS function stays active. (True today: it only touches PA11 and PA12. Keep it that way.)
+- [ ] `dmesg -w` on the Pi shows a new full-speed device and `hid-generic … Gamepad`.
+- [ ] `lsusb -v` shows interface class 3 and EP `0x81` interrupt.
+- [ ] `usbhid-dump` + `hid-decode` match the report descriptor.
+- [ ] `evtest`: every button gives the expected key code.
+- [ ] Unplug/replug, and host suspend/resume.
+- [ ] Confirm `init_hardware_clock()` returns true on the board (else USB is skipped), and the 1 ms tick still holds at 24 MHz.
+- [ ] If enumeration is flaky: enable CRS to trim HSI48 from USB SOF (§3).
+
+## 7. Later (optional)
+
+- [ ] Handle VBUS plug/unplug: unmask `SRQINT` and `OTGINT` in `GINTMSK`, and on unplug reset `hid_reset()` state and disconnect (`SDIS`). Not needed for first enumeration, since `VBDEN` already gates the pull-up on Bvalid.
+- [ ] Vendor control channel for the status protocol (spec §7.2: battery, charger, rumble), probably as `SET_REPORT` / vendor requests on EP0 rather than a new endpoint.

@@ -23,7 +23,7 @@ static void sample_input(input_state_t *inputs, uint16_t raw)
     update_input_state(inputs);
 }
 
-static int test_gpio_decoding(void)
+int test_gpio_decoding(void)
 {
     input_state_t inputs = {0};
 
@@ -44,7 +44,7 @@ static int test_gpio_decoding(void)
     return 0;
 }
 
-static int test_debounce_and_edges(void)
+int test_debounce_and_edges(void)
 {
     input_state_t inputs = {0};
 
