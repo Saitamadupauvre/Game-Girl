@@ -56,14 +56,14 @@ This replaces `usb_TODOS.md` at the repository root.
 - [x] Device setup (§5), rest: FIFO sizes (`GRXFSIZ`, `DIEPTXF0`, `DIEPTXF1`), TX and RX flushes with `AHBIDL` waits, endpoint clear loop, interrupt masks, `GAHBCFG`, NVIC, clear `SDIS` last.
 - [x] FIFO layout decided (§5): RX 64, TX0 32, TX1 16 words, at RX 0–63, TX0 64–95, TX1 96–111 (112 of 320 words). Use named constants and compute each start address from the previous start + depth. `usb_mock.c` still uses 128 / 64 / 64.
 - [?] Check in RM0456 before relying on those sizes: the minimum depth for `DIEPTXFx` (TX1 = 16 assumes it is ≤ 16). RX must stay ≥ 28 words (16 + 2 + 10), because SETUP packets can't be NAKed. (Confirmed in RM0456: the 320-word total, from the dedicated 1.25 KB RAM in the features list, and 6 device endpoints including EP0 in Table 749. Use 6 for the endpoint loop count.)
-- [?] Decide how `init_usb()` reports failure (it returns `void` today, so a timeout is silent). `init_usb_device()` returns `bool` but `init_usb()` ignores it; check it once the flushes can time out, or make it `void`.
+- [?] Decide how `init_usb()` reports failure (it returns `void` today, so a timeout is silent). `init_usb_device()` returns `bool` but `init_usb()` ignores it; check it once the flushes can time out, or make it `void`. (`init_hardware_clock()` already returns `bool`, and `main.c` skips `init_usb()` when it fails. The same pattern would fit here.)
 
 ## 4. `usb.c`: interrupts and transfers (§6, §7.2, §9)
 
 - [x] `txfifo_write()`, `rxfifo_read()`, and the TX/RX flush helpers as `static` functions (§6.6). (`usb_txfifo_write()` and `usb_rxfifo_read()` reviewed. All helpers now have callers and the `-Werror` build is clean.)
 - [x] `OTG_FS_IRQHandler` dispatching to the event handlers (§6). (Suspend and wakeup only clear their flags for now.)
 - [x] USB reset handler, with `DAINTMSK =` (not `|=`) and `hid_reset()` (§6.1). (`usb_on_reset()`, which also calls `ep1_deactivate()`.)
-- [x] Speed-negotiated handler: EP0 64 bytes, `CGINAK`, `TRDT = 0x8` for 24 MHz (§6.2). (`usb_on_enum_done()`. `USB_TRDT_24MHZ` must change if `clock_init()` picks another HCLK.)
+- [x] Speed-negotiated handler: EP0 64 bytes, `CGINAK`, `TRDT = 0x8` for 24 MHz (§6.2). (`usb_on_enum_done()`. `USB_TRDT_24MHZ` must change if `init_hardware_clock()` picks another HCLK.)
 - [x] RX FIFO handler: SETUP and OUT data (§6.3). (`usb_on_rxfifo()`. It isn't called yet: that's the ISR's job.)
 - [x] OUT endpoint handler: re-arm EP0 **before** `apply_setup()` (§6.4). (`usb_on_out_ep()`.)
 - [x] IN endpoint handler: clear flags, `ep1_busy = false` on EP1 `XFRC` (§6.5). (`usb_on_in_ep()`.)
@@ -87,7 +87,7 @@ This replaces `usb_TODOS.md` at the repository root.
 - [ ] `usbhid-dump` + `hid-decode` match the report descriptor.
 - [ ] `evtest`: every button gives the expected key code.
 - [ ] Unplug/replug, and host suspend/resume.
-- [ ] Confirm the 1 ms tick still holds at 24 MHz.
+- [ ] Confirm `init_hardware_clock()` returns true on the board (else USB is skipped), and the 1 ms tick still holds at 24 MHz.
 - [ ] If enumeration is flaky: enable CRS to trim HSI48 from USB SOF (§3).
 
 ## 7. Later (optional)
