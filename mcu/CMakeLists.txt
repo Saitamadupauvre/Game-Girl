@@ -7,9 +7,12 @@ add_library(gamegirl-firmware-objects OBJECT
     src/drivers/timer.c
     src/common/timer_api.c
     src/services/inputs.c
+    src/services/input_task.c
     src/drivers/usb.c
+    src/services/usb_task.c
     src/services/hid.c
     src/services/led.c
+    src/services/fault.c
 )
 
 target_include_directories(gamegirl-firmware-objects PRIVATE include)
