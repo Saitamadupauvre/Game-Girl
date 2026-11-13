@@ -17,8 +17,8 @@ Host tests `gamegirl-input-tests` and `gamegirl-timer-tests` pass.
 - [x] Set `PWR_SVMCR.USV` (and enable the PWR clock first). On the U5, the USB supply stays isolated until this bit is set.
 - [x] Configure PA11/PA12 (USB D-/D+) for the alternate function.
 - [x] Do the core soft reset (`CSRST`) before forcing device mode (`FDMOD`), matching ST's usual init order.
-- [ ] Replace the 25 ms spin in `enable_usb_cores()` with a non-blocking USB state machine, as `docs/mcu/timer-layers.md` requires, or document it as an accepted boot-time exception.
-- [x] VBUS sensing on PA9 (`GCCFG.VBDEN`), `SDIS`, `PCGCCTL` and `DCFG` in `init_usb_device()`. The board must wire VBUS to PA9.
+- [x] The 25 ms mode-switch wait (and the 5 ms VDDUSB monitor wait) in `init_usb()` is an **accepted start-up exception**, documented in `docs/mcu/timer-layers.md` step 6. One `usb_task()` call in `STARTING` blocks about 30 ms, at most about 40 ms (a failing step adds one 10 ms timeout), at most 3 times. Revisit with a split `init_usb()` if background retry or a task needing < 30 ms response is added.
+- [x] VBUS override (`GCCFG.VBDEN = 0`, `GOTGCTL.BVALOEN | BVALOVAL`), `SDIS`, `PCGCCTL` and `DCFG` in `init_usb_device()`. On the Nucleo PA9 is the ST-LINK UART, not VBUS (UM2861 Tables 10, 13).
 - [x] Implement FIFO sizing (`GRXFSIZ`, TX FIFOs), the rest of the device configuration, enumeration and descriptors. (All of `usb.c` §4 is written and builds; untested until the board, see `docs/todos/usb_TODO.md` §5–§6.)
 - [x] Use `hid_report_t` (`mcu/include/hid.h`): convert `input_state_t.current` into a report, add the HID report descriptor, and unit-test report packing for every button. (Done in `hid.c` and `test_hid.c`; sending the report from `usb.c` is still open in `docs/todos/usb_TODO.md` §4.)
 
@@ -55,9 +55,11 @@ Host tests `gamegirl-input-tests` and `gamegirl-timer-tests` pass.
 ## Hardware checks (when the board is available)
 
 - [ ] Each button pulls its documented pin low; the pull-ups read high when released.
-- [ ] `init_hardware_clock()` returns true (VOSRDY and MSISRDY set), and TIM2 really ticks every 1 ms at 24 MHz.
+- [ ] `init_hardware_clock()` returns `FAULT_NONE` (VOSRDY and MSISRDY set), and TIM2 really ticks every 1 ms at 24 MHz.
 - [ ] Port-E buttons read correctly now that `GPIOE_BASE_NS` is fixed.
 - [ ] USB enumeration and HID recognition by Linux.
+- [ ] Nucleo USB power and VBUS: `init_usb()` passes `VDDUSBRDY` (no `0x27`) and `BSVLD` (no `0x26`), and D+ goes high when `SDIS` clears (the Pi logs a new full-speed device in `dmesg`). If nothing appears, check `OTG_GOTGCTL.BSVLD` and `OTG_GCCFG` in the debugger first.
+- [ ] `usb_task()` failure path: force an `init_usb()` failure (e.g. skip `RCC_CR.HSI48ON`, which times out as `FAULT_USB_HSI48`), check 3 attempts about 100 ms apart, the USB fault count reaches 3, the task ends in `FAILED`, and the buttons are still sampled.
 - [ ] MAX17043: I²C pull-ups at 3.3 V and battery JST polarity checked before connecting (see `docs/Game_GIRL_MAX17043_wiring_notes.md`).
 
 ## Not yet started

@@ -600,7 +600,7 @@ static fault_t enable_usb_cores(void)
     OTG_GUSBCFG &= ~OTG_GUSBCFG_FHMOD;
     OTG_GUSBCFG |= OTG_GUSBCFG_FDMOD;
 
-    // The mode change takes up to 25 ms
+    // The mode change takes up to 25 ms. Blocking on purpose: accepted start-up exception (timer-layers.md step 6)
     wait_delay(USB_WAIT_PERIOD_MS);
     if ((OTG_GINTSTS & OTG_GINTSTS_CMOD) != 0u) {   // CMOD: 0 = device mode, 1 = host mode. RM0456 72.15.6
         return FAULT_USB_DEVICE_MODE;
