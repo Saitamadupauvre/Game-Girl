@@ -4,6 +4,7 @@
 #include "cpu.h"
 #include "usb.h"
 #include "hid.h"
+#include "fault.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -538,30 +539,32 @@ static bool enable_OTG_FS_clocks(void)
     RCC_CCIPR1 &= ~RCC_CCIPR1_ICLKSEL_Msk;  // ICLKSEL = 00 selects HSI48 as the USB kernel clock
 
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_OTGEN;     // Enables the OTG_FS peripheral clock
+
     return true;
 }
 
-static bool soft_reset_usb_core(void)
+static fault_t soft_reset_usb_core(void)
 {
     // The AHB master must be idle before a core reset
     if (!wait_comp_setup(&OTG_GRSTCTL, OTG_GRSTCTL_AHBIDL, OTG_GRSTCTL_AHBIDL)) {
-        return false;
+        return FAULT_USB_AHB_IDLE;
     }
 
     OTG_GRSTCTL |= OTG_GRSTCTL_CSRST;   // Core soft reset, the core clears CSRST when done. RM0456 72.15.5
     if (!wait_comp_setup(&OTG_GRSTCTL, OTG_GRSTCTL_CSRST, 0u)) {
-        return false;
+        return FAULT_USB_CORE_RESET;
     }
 
-    return true;
+    return FAULT_NONE;
 }
 
-static bool enable_usb_cores(void)
+static fault_t enable_usb_cores(void)
 {
     OTG_GUSBCFG |= OTG_GUSBCFG_PHYSEL;  // Selects the embedded full-speed PHY, normally already set. RM0456 72.15.4
 
-    if (!soft_reset_usb_core()) {
-        return false;
+    const fault_t fault = soft_reset_usb_core();
+    if (fault != FAULT_NONE) {
+        return fault;
     }
     OTG_GCCFG |= OTG_GCCFG_PWRDWN;  // 1 = transceiver powered. RM0456 72.15.15
 
@@ -579,14 +582,14 @@ static bool enable_usb_cores(void)
 
     // The mode change takes up to 25 ms
     wait_delay(USB_WAIT_PERIOD_MS);
-    if ((OTG_GINTSTS & OTG_GINTSTS_CMOD) != 0u) {   // CMOD: 0 = device mode, 1 = host mode, so 1 means the force failed. RM0456 72.15.6
-        return false;
+    if ((OTG_GINTSTS & OTG_GINTSTS_CMOD) != 0u) {   // CMOD: 0 = device mode, 1 = host mode. RM0456 72.15.6
+        return FAULT_USB_DEVICE_MODE;
     }
 
-    return true;
+    return FAULT_NONE;
 }
 
-static bool init_usb_device(void)
+static fault_t init_usb_device(void)
 {
     OTG_GCCFG |= OTG_GCCFG_VBDEN;   // B-session valid comes from VBUS sensing on PA9 (OTG_FS_VBUS)
 
@@ -602,8 +605,12 @@ static bool init_usb_device(void)
     OTG_DIEPTXF0 = ((uint32_t)USB_TX0_FIFO_SIZE << OTG_DIEPTXF_DEPTH_Pos) | USB_TX0_FIFO_START;
     OTG_DIEPTXF1 = ((uint32_t)USB_TX1_FIFO_SIZE << OTG_DIEPTXF_DEPTH_Pos) | USB_TX1_FIFO_START;
 
-    if (!tx_fifo_flush(OTG_GRSTCTL_TXFNUM_ALL) || !rx_fifo_flush()) {
-        return false;
+    if (!tx_fifo_flush(OTG_GRSTCTL_TXFNUM_ALL)) {
+        return FAULT_USB_TX_FLUSH;
+    }
+
+    if (!rx_fifo_flush()) {
+        return FAULT_USB_RX_FLUSH;
     }
 
     // Mask the endpoint interrupts while the endpoints are cleared
@@ -626,19 +633,23 @@ static bool init_usb_device(void)
 
     OTG_DCTL &= ~OTG_DCTL_SDIS;     // Enables the D+ pull-up so the host can see our device.
 
-    return true;
+    return FAULT_NONE;
 }
 
-void init_usb(void)
+// Returns FAULT_NONE once the device is connected, or the fault of the first step that timed out.
+fault_t init_usb(void)
 {
     init_usb_power();
     enable_usb_pins();
 
-    if (!enable_OTG_FS_clocks() || !enable_usb_cores()) {
-        return;
+    if (!enable_OTG_FS_clocks()) {
+        return FAULT_USB_HSI48;
     }
 
-    if (!init_usb_device()) {
-        return;
+    const fault_t fault = enable_usb_cores();
+    if (fault != FAULT_NONE) {
+        return fault;
     }
+
+    return init_usb_device();
 }

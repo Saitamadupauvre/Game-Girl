@@ -17,6 +17,11 @@
 
 static uint32_t hclk_hz = MSIS_RESET_HZ;
 
+uint32_t hardware_clock_hz(void)
+{
+    return hclk_hz;
+}
+
 static bool wait_flag_set(volatile uint32_t *reg, uint32_t flag)
 {
     for (uint32_t i = 0; i < CLOCK_READY_SPINS; i++) {
@@ -33,43 +38,52 @@ static bool wait_flag_set(volatile uint32_t *reg, uint32_t flag)
  * Range 3 allows up to 55 MHz with 0 flash and SRAM wait states up to 24 MHz
  * (RM0456 Table 54 and Table 47), so FLASH_ACR and RAMCFG keep their reset value of 0 WS.
  */
-static bool raise_core_voltage(void)
+static fault_t raise_core_voltage(void)
 {
     RCC_AHB3ENR |= RCC_AHB3ENR_PWREN;   // PWR clock, needed to write PWR_VOSR
     (void)RCC_AHB3ENR;                  // Read back so the clock is running before PWR is accessed
 
     PWR_VOSR = (PWR_VOSR & ~PWR_VOSR_VOS_Msk) | PWR_VOSR_VOS_RANGE3;
 
-    return wait_flag_set(&PWR_VOSR, PWR_VOSR_VOSRDY);
+    if (!wait_flag_set(&PWR_VOSR, PWR_VOSR_VOSRDY)) {
+        return FAULT_CLOCK_VOS;
+    }
+
+    return FAULT_NONE;
 }
 
 /*
  * MSIS is already the system clock after reset, so changing its range speeds up HCLK, the APB
  * buses and TIM2 at once. RM0456 11.8.2: the range must not change while MSIS is on but not ready.
  */
-static bool set_msis_24mhz(void)
+static fault_t set_msis_24mhz(void)
 {
     if (!wait_flag_set(&RCC_CR, RCC_CR_MSISRDY)) {
-        return false;
+        return FAULT_CLOCK_MSIS_NOT_READY;
     }
 
     // MSIRGSEL = 1 takes the range from ICSCR1; at 0 (reset) the range in RCC_CSR is used instead
     RCC_ICSCR1 = (RCC_ICSCR1 & ~RCC_ICSCR1_MSISRANGE_Msk) | RCC_ICSCR1_MSISRANGE_24MHZ | RCC_ICSCR1_MSIRGSEL;
 
-    return wait_flag_set(&RCC_CR, RCC_CR_MSISRDY);
+    if (!wait_flag_set(&RCC_CR, RCC_CR_MSISRDY)) {
+        return FAULT_CLOCK_MSIS_RANGE;
+    }
+
+    return FAULT_NONE;
 }
 
-bool init_hardware_clock(void)
+fault_t init_hardware_clock(void)
 {
-    if (!raise_core_voltage() || !set_msis_24mhz()) {
-        return false;
+    fault_t fault = raise_core_voltage();
+    if (fault != FAULT_NONE) {
+        return fault;
+    }
+
+    fault = set_msis_24mhz();
+    if (fault != FAULT_NONE) {
+        return fault;   // hclk_hz stays at 4 MHz
     }
 
     hclk_hz = MSIS_24MHZ_HZ;
-    return true;
-}
-
-uint32_t hardware_clock_hz(void)
-{
-    return hclk_hz;
+    return FAULT_NONE;
 }
