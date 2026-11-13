@@ -8,6 +8,17 @@
 #include <stdint.h>
 
 
+#define USB_REQUIRED_HCLK_HZ    24000000UL  // usb.c sets TRDT for 24 MHz, and range 3 is needed anyway
+#define USB_START_ATTEMPTS      3u
+#define USB_RETRY_BACKOFF_MS    100UL
+
+typedef enum {
+    USB_TASK_STARTING,  // Next call runs init_usb()
+    USB_TASK_BACKOFF,   // An attempt failed, waiting before the next one
+    USB_TASK_RUNNING,   // Core is up, reports are sent
+    USB_TASK_FAILED,    // Gave up, the rest of the firmware keeps running
+} usb_task_state_t;
+
 static usb_task_state_t state = USB_TASK_STARTING;
 static uint8_t attempts;
 static deadline_t backoff_timer;
@@ -28,6 +39,7 @@ static void usb_task_start(void)
     }
 
     fault_log(fault);   // Every attempt is logged, so the USB counter shows how many failed
+    hard_reset_usb();
 
     if (attempts >= USB_START_ATTEMPTS) {
         state = USB_TASK_FAILED;

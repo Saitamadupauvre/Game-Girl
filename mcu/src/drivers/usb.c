@@ -11,6 +11,9 @@
 #include <stdbool.h>
 
 
+#define USB_CORE_TIMEOUT_MS     10UL    // Longest wait for any core flag (wait_comp_setup)
+#define USB_UVM_WAKEUP_MS       5UL     // UVM wake-up, not given in the datasheet: generous margin
+
 #define USB_WORD_BYTES  4u
 #define USB_BITS_PER_BYTE 8u
 
@@ -390,7 +393,7 @@ static void usb_on_out_ep(void)
     }
 
     const uint32_t flags = OTG_DOEPINT(0);
-    OTG_DOEPINT(0) = flags;     // Write-1-to-clear every flag that was read
+    OTG_DOEPINT(0) = flags;     // Write 1 to clear every flag that was read
 
     if ((flags & OTG_DOEPINT_STUP) != 0u) {
         ep0_arm_setup();            // Re-arm first: apply_setup() may arm the status OUT stage
@@ -507,10 +510,27 @@ void usb_hid_send_if_changed(const input_state_t *inputs)
 
 /* Initialisation, in call order */
 
-static void init_usb_power(void)
+/*
+ * RM0456 10.6.3 order: monitor on, wait, VDDUSB present, monitor off, then remove the isolation.
+ * On the Nucleo VDDUSB is tied to 3V3 (UM2861 SB30), so this only catches a wiring fault.
+ */
+static fault_t init_usb_power(void)
 {
     RCC_AHB3ENR |= RCC_AHB3ENR_PWREN;   // PWR clock, needed to write PWR_SVMCR
+    (void)RCC_AHB3ENR;                  // Read back so the clock is running before PWR is accessed
+
+    PWR_SVMCR |= PWR_SVMCR_UVMEN;
+    wait_delay(USB_UVM_WAKEUP_MS);      // UVM wake-up time, not given in the datasheet
+
+    const bool vddusb_ok = wait_comp_setup(&PWR_SVMSR, PWR_SVMSR_VDDUSBRDY, PWR_SVMSR_VDDUSBRDY);
+    PWR_SVMCR &= ~PWR_SVMCR_UVMEN;      // Monitor off either way, its interrupt is not used
+
+    if (!vddusb_ok) {
+        return FAULT_USB_VDDUSB;
+    }
+
     PWR_SVMCR |= PWR_SVMCR_USV;         // VDDUSB valid, removes the USB isolation
+    return FAULT_NONE;
 }
 
 static void enable_usb_pins(void)
@@ -591,9 +611,15 @@ static fault_t enable_usb_cores(void)
 
 static fault_t init_usb_device(void)
 {
-    OTG_GCCFG |= OTG_GCCFG_VBDEN;   // B-session valid comes from VBUS sensing on PA9 (OTG_FS_VBUS)
-
     OTG_DCTL |= OTG_DCTL_SDIS;      // Soft-disconnect from the host until the rest of the setup is done
+
+    // No VBUS on PA9 (Nucleo), so no VBUS sensing: BVALOEN = use BVALOVAL instead, BVALOVAL = B-session valid
+    OTG_GCCFG &= ~OTG_GCCFG_VBDEN;
+    OTG_GOTGCTL |= OTG_GOTGCTL_BVALOEN | OTG_GOTGCTL_BVALOVAL;
+
+    if (!wait_comp_setup(&OTG_GOTGCTL, OTG_GOTGCTL_BSVLD, OTG_GOTGCTL_BSVLD)) {
+        return FAULT_USB_BSESSION;
+    }
     OTG_PCGCCTL = 0;                // Clears the power and clock gating bits
 
     // Clear device speed, device address and periodic frame interval, then select full speed
@@ -639,17 +665,39 @@ static fault_t init_usb_device(void)
 // Returns FAULT_NONE once the device is connected, or the fault of the first step that timed out.
 fault_t init_usb(void)
 {
-    init_usb_power();
+    fault_t fault = init_usb_power();
+    if (fault != FAULT_NONE) {
+        return fault;
+    }
+
     enable_usb_pins();
 
     if (!enable_OTG_FS_clocks()) {
         return FAULT_USB_HSI48;
     }
 
-    const fault_t fault = enable_usb_cores();
+    fault = enable_usb_cores();
     if (fault != FAULT_NONE) {
         return fault;
     }
 
     return init_usb_device();
+}
+
+void hard_reset_usb(void)
+{
+    // Hardware reset.
+    usb_irq_disable();
+
+    OTG_DCTL |= OTG_DCTL_SDIS;  // Clean disconnect from host before hard resetting.
+
+    RCC_AHB2RSTR1 |= RCC_AHB2RSTR1_OTGRST;  // Hard OTG_FS resets RM0456 11.8.22 bit 14
+    RCC_AHB2RSTR1 &= ~RCC_AHB2RSTR1_OTGRST;    // Release the reset to run init_usb() again.
+
+    NVIC_ICPR2 = 1UL << (OTG_FS_IRQ_NUM - 64U);
+
+    // RAM reset.
+    ep1_busy = false;
+    report_pending = false;
+    hid_reset(&hid_state);
 }

@@ -30,6 +30,8 @@ typedef enum {
     FAULT_USB_DEVICE_MODE       = 0x23,     // GINTSTS.CMOD still says host after forcing device mode
     FAULT_USB_TX_FLUSH          = 0x24,     // TX FIFO flush timed out
     FAULT_USB_RX_FLUSH          = 0x25,     // RX FIFO flush timed out
+    FAULT_USB_BSESSION          = 0x26,     // GOTGCTL.BSVLD not set after the B-valid override
+    FAULT_USB_VDDUSB            = 0x27,     // PWR_SVMSR.VDDUSBRDY never set: VDDUSB absent
 
     // 0x3_: system / software
     FAULT_SYS_WATCHDOG_LOOP     = 0x30,     // Too many watchdog resets in a row (#42)
