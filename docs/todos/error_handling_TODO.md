@@ -16,31 +16,35 @@ Register references are RM0456 Rev 7. Related lists: [`usb_TODO.md`](usb_TODO.md
 ## Done
 
 - [x] Every hardware wait in `usb.c` has a timeout (`wait_comp_setup()`, `USB_CORE_TIMEOUT_MS`).
-- [x] `init_hardware_clock()` returns `bool`. On failure the chip stays at 4 MHz, TIM2 still ticks at 1 ms (prescaler from `hardware_clock_hz()`), and `main()` skips `init_usb()`.
+- [x] `init_hardware_clock()` returns `fault_t`. On failure the chip stays at 4 MHz, TIM2 still ticks at 1 ms (prescaler from `hardware_clock_hz()`), and `usb_task()` goes straight to `FAILED` without calling `init_usb()`.
 - [x] USB runtime recovery from the host side: a bus reset runs `usb_on_reset()`, which returns to address 0 with EP1 off.
+- [x] Superloop of non-blocking tasks. `main()` runs `init_system()` once (clock, GPIO, timer), then loops `input_task()` → `usb_task()`. Nothing in the loop blocks or retries inline.
 
 ## 1. Error reporting (shared by everything below)
 
-- [ ] Define one error-code type, e.g. `fault_t` in `mcu/include/fault.h`: `FAULT_NONE`, `FAULT_CLOCK_VOS`, `FAULT_CLOCK_MSIS`, `FAULT_USB_HSI48`, `FAULT_USB_CORE_RESET`, `FAULT_USB_DEVICE_MODE`, `FAULT_USB_FIFO_FLUSH`, … One code per wait that can time out, so a failure names its step.
-- [ ] Keep the last fault and a per-subsystem state (`OK` / `RETRYING` / `FAILED`) in one place that the main loop and the status protocol can read.
-- [ ] Decide whether the `init_*()` functions return `fault_t` instead of `bool`, so the caller learns *which* step failed. `bool` is enough for the retry decision, `fault_t` is better for debugging.
+- [x] One error-code type, `fault_t` in `mcu/include/fault.h`: `0xSN`, high nibble = subsystem (clock, USB, system), low nibble = step. One code per wait that can time out, so a failure names its step.
+- [x] `fault_log()` (`mcu/src/services/fault.c`) keeps the last fault and a saturating count per subsystem. Callers only pass real faults (they check `!= FAULT_NONE` first).
+- [ ] Per-subsystem state (`OK` / `RETRYING` / `FAILED`) readable by the status protocol. USB's state exists but is private to `usb_task.c`; expose a getter when the status protocol needs it.
+- [x] The `init_*()` functions return `fault_t` instead of `bool`, so the caller learns *which* step failed.
 
 ## 2. USB init: retry, then degrade
 
 Closes the `[?]` "how `init_usb()` reports failure" in `usb_TODO.md` §3.
 
-- [ ] `init_usb()` returns the result of its steps, including `init_usb_device()` (it ignores that today).
+- [x] `init_usb()` returns the `fault_t` of the first step that failed, including `init_usb_device()`.
+- [x] Start-up runs from `usb_task()` (`mcu/src/services/usb_task.c`), a state machine: `STARTING` → `RUNNING`, or `BACKOFF` → `STARTING` again, or `FAILED`. Every failed attempt is passed to `fault_log()`.
 - [ ] Add `RCC_AHB2RSTR1` (RCC + `0x064`, §11.8.22) and `RCC_AHB2RSTR1_OTGRST` (bit 14) to `stm32u575_regs.h`.
-- [ ] Between attempts, pulse `OTGRST` (set, then clear). It resets the whole OTG block, which clears more than the core soft reset (`CSRST`).
-- [ ] Up to 3 attempts, with a growing wait between them (e.g. 10, 50, 100 ms).
-- [ ] After the last attempt: USB state = `FAILED`, `usb_hid_send_if_changed()` returns straight away, and the main loop carries on.
-- [ ] Decide on a background retry, e.g. every few seconds, or when VBUS appears (see §7 of `usb_TODO.md`). This needs `init_usb()` as a non-blocking state machine, which also covers the open `TODOs.md` item about the 25 ms busy-wait.
+- [ ] Between attempts, pulse `OTGRST` (set, then clear), with the USB IRQ masked: a `usb_deinit()` in `usb.c` called from `usb_task()` before each retry. It resets the whole OTG block, which clears more than the core soft reset (`CSRST`). Today a retry reruns `init_usb()` on the same core; that is safe only because every early return comes before the NVIC enable.
+- [x] Up to 3 attempts (`USB_START_ATTEMPTS`), 100 ms apart (`USB_RETRY_BACKOFF_MS`), waiting without blocking.
+- [ ] Growing wait between attempts (e.g. 10, 50, 100 ms) instead of a fixed 100 ms.
+- [x] After the last attempt: `usb_task()` stays in `FAILED`, never calls `usb_hid_send_if_changed()`, and the main loop carries on.
+- [ ] Decide on a background retry, e.g. every few seconds, or when VBUS appears (see §7 of `usb_TODO.md`). `usb_task()` is already non-blocking between attempts, but each `init_usb()` call still contains the 25 ms busy-wait (open `TODOs.md` item).
 - [ ] Runtime last resort, if the host stops talking to an enumerated device: soft replug, `DCTL.SDIS = 1` for about 10 ms, then clear it. The host sees an unplug and enumerates again, without touching the rest of the firmware.
 
 ## 3. Clock init
 
 - [ ] Decide whether a failed `init_hardware_clock()` is retried once, or the 4 MHz fallback is final until the next reset. A VOS or MSIS timeout is almost certainly a hardware or supply fault, so one retry at most.
-- [ ] Record which step failed (`FAULT_CLOCK_VOS` / `FAULT_CLOCK_MSIS`), so the blink code can tell "no USB because of the clock" from a USB fault.
+- [x] Record which step failed (`FAULT_CLOCK_VOS` / `FAULT_CLOCK_MSIS_NOT_READY` / `FAULT_CLOCK_MSIS_RANGE`), so the blink code can tell "no USB because of the clock" from a USB fault. `usb_task()` logs nothing extra in that case.
 
 ## 4. Watchdog (IWDG, RM0456 chapter 61)
 

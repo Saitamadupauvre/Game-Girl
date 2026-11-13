@@ -37,19 +37,25 @@ The §2 clock registers (`RCC_ICSCR1`, `RCC_CR.MSISRDY`, `PWR_VOSR`) are defined
 ## 0. Big picture
 
 ```text
-boot
+boot: init_system()  (main.c, runs once)
  ├─ init_hardware_clock()   VOS range 3, then HCLK 4 → 24 MHz (USB FS needs ≥ 14.2 MHz)
- ├─ init_timer()            (TIM2 prescaler comes from hardware_clock_hz())
- ├─ init_usb()              (skipped if init_hardware_clock() failed)
- │   ├─ power   : PWR clock on, VDDUSB valid (USV)
- │   ├─ pins    : PA11/PA12 → AF10
- │   ├─ clocks  : HSI48 on, ICLKSEL = HSI48, OTG clock on
- │   ├─ core    : PHYSEL → soft reset → PWRDWN → force device mode
- │   ├─ device  : VBUS config, DCFG, FIFOs, flush, masks, NVIC
- │   └─ connect : clear DCTL.SDIS
- └─ main loop
-     ├─ update_input_state()
-     └─ usb_hid_send_if_changed()      (non-blocking)
+ ├─ init_GPIO()
+ └─ init_timer()            (TIM2 prescaler comes from hardware_clock_hz())
+
+main loop  (superloop, every task returns quickly)
+ ├─ input_task()            every 1 ms: read pins, debounce (inputs_get() returns the state)
+ └─ usb_task()              (services/usb_task.c)
+     ├─ STARTING : clock not at 24 MHz → FAILED, else init_usb()
+     │   ├─ power   : PWR clock on, VDDUSB valid (USV)
+     │   ├─ pins    : PA11/PA12 → AF10
+     │   ├─ clocks  : HSI48 on, ICLKSEL = HSI48, OTG clock on
+     │   ├─ core    : PHYSEL → soft reset → PWRDWN → force device mode
+     │   ├─ device  : VBUS config, DCFG, FIFOs, flush, masks, NVIC
+     │   └─ connect : clear DCTL.SDIS
+     │   ok → RUNNING;  fault → fault_log(), then BACKOFF (100 ms), or FAILED after 3 attempts
+     ├─ BACKOFF  : wait without blocking, then STARTING
+     ├─ RUNNING  : usb_hid_send_if_changed(inputs_get())   (non-blocking)
+     └─ FAILED   : nothing, the rest of the loop keeps running
 
 OTG_FS_IRQHandler  (all enumeration happens here)
  ├─ USBRST   → reset endpoints, hid_reset(), arm EP0 OUT for SETUP
@@ -103,11 +109,12 @@ The code is split by layer, the same way `gpio.c` (registers) and `inputs.c` (lo
 ```text
 mcu/
 ├─ include/
-│  ├─ usb.h              init_usb(), usb_hid_send_if_changed(), OTG_FS_IRQHandler(), usb_reply_t
+│  ├─ usb.h              init_usb(), usb_hid_send_if_changed(), OTG_FS_IRQHandler(), usb_reply_t, usb_task()
 │  └─ hid.h              hid_report_t, hid_state_t, hid_pack(), hid_reset(), hid_handle_setup()
 ├─ src/
 │  ├─ drivers/usb.c      everything that touches OTG_FS registers
-│  └─ services/hid.c     pure logic: no registers, runs on the PC
+│  ├─ services/hid.c     pure logic: no registers, runs on the PC
+│  └─ services/usb_task.c start-up policy: retries, backoff, FAILED; sends reports once running
 └─ tests/test_hid.c      host tests for hid.c
 ```
 
@@ -319,24 +326,24 @@ Two smaller side effects of the read-modify-write:
 ### Sequence
 
 ```text
-init_hardware_clock() -> bool:                  // first call in main(), before init_timer()
+init_hardware_clock() -> fault_t:               // first call in init_system(), before init_timer()
     // 1. Voltage first (RM0456 §10.5.4 order: VOS, wait states, then frequency)
     RCC_AHB3ENR |= PWREN;  (void)RCC_AHB3ENR    // PWR clock on; read back so it's running
     PWR_VOSR.VOS = 01 (range 3)
-    wait until PWR_VOSR.VOSRDY                  // timeout → return false, stay at 4 MHz
+    wait until PWR_VOSR.VOSRDY                  // timeout → FAULT_CLOCK_VOS, stay at 4 MHz
 
     // 2. Wait states: nothing to do (0 WS covers range 3 at 24 MHz)
 
     // 3. Frequency
-    wait until RCC_CR.MSISRDY                   // range must not change while not ready
+    wait until RCC_CR.MSISRDY                   // range must not change while not ready → FAULT_CLOCK_MSIS_NOT_READY
     RCC_ICSCR1 = (ICSCR1 & ~MSISRANGE) | MSISRANGE_24MHZ | MSIRGSEL
-    wait until RCC_CR.MSISRDY                   // oscillator settled on the new range
+    wait until RCC_CR.MSISRDY                   // oscillator settled on the new range → FAULT_CLOCK_MSIS_RANGE
 
-    hclk_hz = 24 MHz;  return true
+    hclk_hz = 24 MHz;  return FAULT_NONE
 ```
 
 - **Timeouts:** TIM2 isn't running yet, so `deadline_t` can't be used. The waits count 100 000 loop passes, well over 10 ms at 4 MHz. The hardware needs microseconds.
-- **On failure** the chip stays at 4 MHz. Buttons and the timer work, USB doesn't, so `main()` skips `init_usb()`.
+- **On failure** the chip stays at 4 MHz and `init_system()` logs the `FAULT_CLOCK_*` code. Buttons and the timer work, USB doesn't: `usb_task()` sees `hardware_clock_hz() != 24 MHz` and goes to `FAILED` without calling `init_usb()`.
 - **TIM2:** `init_timer()` computes `PSC = hardware_clock_hz() / 1000 - 1`: 23 999 at 24 MHz, 3 999 if the clock stayed at 4 MHz. Both fit the 16-bit prescaler, and the tick stays 1 ms either way.
 
 > If you ever go **down** in frequency, reverse the order: lower the clock, then the wait states, then the voltage.
