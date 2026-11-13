@@ -22,7 +22,6 @@
 
 #define RCC_ICSCR1_OFFSET 0x00000008UL   // RCC internal clock sources calibration register 11.8.2
 #define RCC_ICSCR1 MMIO32(RCC_BASE_NS + RCC_ICSCR1_OFFSET)
-#define RCC_ICSCR1 MMIO32(RCC_BASE_NS + RCC_ICSCR1_OFFSET)
 
 // RCC_AHB2ENR1 bits
 
@@ -160,8 +159,10 @@
 // 32-bit push (TX) / pop (RX) port for endpoint n, not RAM
 #define OTG_FIFO(n)     MMIO32(OTG_FS_BASE_NS + 0x1000UL + ((uint32_t)(n) * 0x1000UL))
 
-#define OTG_GOTGCTL_BVALOEN     (1UL << 6)
-#define OTG_GOTGCTL_BVALOVAL    (1UL << 7)
+// OTG_GOTGCTL. RM0456 72.15.1. The B-valid override bits are device-mode only
+#define OTG_GOTGCTL_BVALOEN     (1UL << 6)      // 1 = use BVALOVAL instead of the VBUS pin
+#define OTG_GOTGCTL_BVALOVAL    (1UL << 7)      // Override value: 1 = B-session valid
+#define OTG_GOTGCTL_BSVLD       (1UL << 19)     // Read-only: the B-session state the core sees
 
 #define OTG_GAHBCFG_GINTMSK     (1UL << 0)
 
@@ -282,6 +283,12 @@
 #define RCC_AHB3ENR     MMIO32(RCC_BASE_NS + RCC_AHB3ENR_OFFSET)
 #define RCC_AHB3ENR_PWREN   (1UL << 2)
 
+// RCC AHB2 peripheral reset (RM0456 11.8.22). Set then clear by software: 1 holds the block in reset
+
+#define RCC_AHB2RSTR1_OFFSET    0x00000064UL
+#define RCC_AHB2RSTR1   MMIO32(RCC_BASE_NS + RCC_AHB2RSTR1_OFFSET)
+#define RCC_AHB2RSTR1_OTGRST    (1UL << 14)     // Hard OTG_FS reset
+
 // ICLKSEL to select clock src for USB
 
 #define RCC_CCIPR1_OFFSET   0x000000E0UL
@@ -295,6 +302,11 @@
 #define PWR_SVMCR_OFFSET    0x00000010UL
 #define PWR_SVMCR       MMIO32(PWR_BASE_NS + PWR_SVMCR_OFFSET)
 #define PWR_SVMCR_USV   (1UL << 28)     // VDDUSB valid: removes USB isolation
+#define PWR_SVMCR_UVMEN (1UL << 24)     // VDDUSB voltage monitor enable. RM0456 10.10.5
+
+#define PWR_SVMSR_OFFSET    0x0000003CUL    // RM0456 10.10.16
+#define PWR_SVMSR       MMIO32(PWR_BASE_NS + PWR_SVMSR_OFFSET)
+#define PWR_SVMSR_VDDUSBRDY (1UL << 24)     // VDDUSB above the UVM threshold (~1.2 V), valid while UVMEN = 1
 
 #define PWR_VOSR_OFFSET     0x0000000CUL    // RM0456 10.10.4
 #define PWR_VOSR        MMIO32(PWR_BASE_NS + PWR_VOSR_OFFSET)
@@ -320,6 +332,7 @@
 
 #define NVIC_ISER2      MMIO32(0xE000E108UL)    // IRQ 64..95
 #define NVIC_ICER2      MMIO32(0xE000E188UL)
+#define NVIC_ICPR2      MMIO32(0xE000E288UL)    // Clear-pending, write 1 to clear
 
 
 /*
