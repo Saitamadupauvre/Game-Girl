@@ -166,6 +166,7 @@ This is why turning HSI48 on (`HSI48ON`) is not enough. That only starts the osc
 | **TIM2 follows the clock** | TIM2 counts ticks of its bus clock. If HCLK goes from 4 to 24 MHz and the prescaler stays the same, the "1 ms" tick becomes 1/6 ms and every `deadline_t` expires six times too early, including the USB timeouts. `timer.c` computes the prescaler from `hardware_clock_hz()`, so the two can't disagree. |
 | **PWR clock (`PWREN`)** | The PWR block is a peripheral like any other. Its registers ignore writes until its bus clock is on. |
 | **`PWR_SVMCR.USV`** | The USB pins are powered by a separate supply rail, **VDDUSB** (3.3 V). The U5 keeps that domain electrically isolated until software sets `USV` to say "VDDUSB is present and valid". The isolation protects the chip on boards where VDDUSB might be absent. Until the bit is set, the USB transceiver and the PA11/PA12 pads are disconnected from the core, so nothing reaches the wire. |
+| **VDDUSB monitor (`UVMEN`, `VDDUSBRDY`)** | RM0456 §10.6.3 checks that VDDUSB is really there before `USV` is set: monitor on, wait, `VDDUSBRDY`, monitor off. The monitor trips at about 1.2 V, so it catches a **missing** rail, not a low one (USB needs 3.0–3.6 V). On the Nucleo, VDDUSB is tied to 3V3 through SB30 (UM2861 Table 9), so the check only catches a wiring fault (`FAULT_USB_VDDUSB`). |
 | **HSI48** | Full-speed USB runs at 12 Mbit/s, and the core samples it with a 48 MHz clock (4× oversampling). The rate must be within **±0.25 %** (USB 2.0 spec). HSI48 is an internal RC oscillator designed for this. |
 | **CRS (optional)** | An RC oscillator drifts with temperature. The host sends a Start-of-Frame packet exactly every 1 ms, and CRS uses those as a reference to trim HSI48 continuously. Without CRS it usually works, but it can be the cause of flaky enumeration. |
 
@@ -192,7 +193,7 @@ This is why turning HSI48 on (`HSI48ON`) is not enough. That only starts the osc
 
 | Step | Why |
 |---|---|
-| **VBUS sensing (`VBDEN`) / `BVALOEN`+`BVALOVAL`** | The USB spec forbids a device from switching on its D+ pull-up unless the host is supplying VBUS. A self-powered device must never push current into an unpowered host. So the core won't connect until it sees a valid VBUS on the sense pin (PA9). `usb.c` uses this: it sets `GCCFG.VBDEN`, so **the board must wire the connector's VBUS to PA9**, otherwise the core thinks no cable is plugged in and **never connects**. The fallback is the override bits `BVALOEN`+`BVALOVAL`, which tell the core "VBUS is valid". The trade-off: the core can no longer detect an unplug, so the battery-powered Game GIRL would keep its pull-up on with no cable attached. That's harmless in practice, and `usb_mock.c` uses it. |
+| **VBUS override (`BVALOEN`+`BVALOVAL`)** | The core only connects the D+ pull-up once **B-session valid** is 1, i.e. it has seen the host's 5 V on VBUS (RM0456 §72.6.2, Powered state). With `GCCFG.VBDEN` it reads that from PA9. On the Nucleo, PA9 is the ST-LINK UART and VBUS goes to PC2 for UCPD (UM2861 Tables 10 and 13), so sensing would never see the cable and the device would **never connect**, with no fault. `usb.c` turns sensing off and sets `GOTGCTL.BVALOEN` (use the override) + `BVALOVAL` (value = valid), then waits for `BSVLD` (`FAULT_USB_BSESSION`). The trade-off: no VBUS-loss detection. An unplug still shows up as bus idle (`USBSUSP`), and a replug as `USBRST`. `HNPCAP`/`SRPCAP` must stay 0, or the VBUS comparators turn on regardless of `VBDEN` (§72.15.15). For the Game Girl PCB: decide then whether to route VBUS to PA9. |
 | **`DCTL.SDIS` during setup** | A full-speed device announces itself by pulling **D+ high through 1.5 kΩ**. The host detects that and starts enumerating straight away. Keep the device "soft-disconnected" until FIFOs, masks and the IRQ are ready, or the host sends requests nobody is ready to answer. |
 | **`DCFG.DSPD = full speed`** | The core can also run at high speed with an external PHY. This tells it to use 12 Mbit/s full speed. |
 | **FIFO sizes** | The core has one block of dedicated packet RAM (1.25 KB = 320 words, separate from the main SRAM), and software decides how it is split. **RX** is a single shared FIFO, because every OUT and SETUP packet arrives in one queue, tagged with a status word saying which endpoint it belongs to. **Each IN endpoint gets its own TX FIFO**, so a gamepad report waiting on EP1 can't block an EP0 reply during enumeration. If two regions overlap, packets corrupt each other. |
@@ -353,11 +354,13 @@ init_hardware_clock() -> fault_t:               // first call in init_system(), 
 ## 3. `init_usb()` — power, pins, clocks
 
 ```text
-usb_power_init():
-    RCC.AHB3ENR |= PWREN                        // already done in init_hardware_clock, harmless
-    PWR.SVMCR   |= USV                          // bit 28, SVMCR @ 0x10   ✔ CMSIS
-                                                // = HAL_PWREx_EnableVddUSB ✔ HAL
-    // Optional: UVMEN (bit 24) enables the VDDUSB monitor, then wait for UVMRDY ⚠ RM
+init_usb_power() -> fault_t:                    // RM0456 §10.6.3 sequence
+    RCC.AHB3ENR |= PWREN;  (void)RCC.AHB3ENR    // already on from init_hardware_clock, harmless
+    PWR.SVMCR   |= UVMEN                        // bit 24: VDDUSB monitor on
+    wait 5 ms                                   // UVM wake-up time, not given in DS13737
+    wait SVMSR.VDDUSBRDY (bit 24, SVMSR @ 0x3C) // timeout → FAULT_USB_VDDUSB (monitor off first)
+    PWR.SVMCR   &= ~UVMEN                       // monitor off, its interrupt is not used
+    PWR.SVMCR   |= USV                          // bit 28, SVMCR @ 0x10: remove the VDDUSB isolation
 
 usb_pins_init():
     RCC.AHB2ENR1 |= GPIOAEN                     // bit 0 (already in regs.h)
@@ -414,14 +417,13 @@ usb_core_init():
 
 ```text
 usb_device_init():
-    // --- VBUS: the Pi supplies it, and the board wires it to PA9 (OTG_FS_VBUS) ---
-    GCCFG   |= VBDEN                            // bit 21: sense VBUS on PA9. Leave PA9 unconfigured.
-                                                // usb.c does this, no override needed
-    // Fallback if the board does NOT wire VBUS to PA9 (this is what usb_mock.c does):  ✔ HAL
-    //     GCCFG   &= ~VBDEN
-    //     GOTGCTL |= BVALOEN | BVALOVAL        // bits 6, 7: pretend VBUS is valid
-
     DCTL     |= SDIS                            // bit 1: stay disconnected during setup
+
+    // --- VBUS: not wired to PA9 on the Nucleo (UM2861 Tables 10, 13), so override it ---
+    GCCFG   &= ~VBDEN                           // bit 21: no VBUS sensing on PA9
+    GOTGCTL |= BVALOEN | BVALOVAL               // bits 6, 7: B-session valid = 1 (device mode only,
+                                                // so after force_device_mode)   ✔ RM0456 §72.15.1
+    wait GOTGCTL.BSVLD (bit 19)                 // timeout → FAULT_USB_BSESSION
     PCGCCTL   = 0                               // restart PHY clock
 
     DCFG: DSPD (bits 1:0) = 0b11 → full speed (embedded PHY)       ✔ CMSIS / HAL
