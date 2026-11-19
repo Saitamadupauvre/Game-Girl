@@ -344,7 +344,8 @@ init_hardware_clock() -> fault_t:               // first call in init_system(), 
 ```
 
 - **Timeouts:** TIM2 isn't running yet, so `deadline_t` can't be used. The waits count 100 000 loop passes, well over 10 ms at 4 MHz. The hardware needs microseconds.
-- **On failure** the chip stays at 4 MHz and `init_system()` logs the `FAULT_CLOCK_*` code. Buttons and the timer work, USB doesn't: `usb_task()` sees `hardware_clock_hz() != 24 MHz` and goes to `FAILED` without calling `init_usb()`.
+- **On failure** the chip stays at 4 MHz and `init_system()` logs the `FAULT_CLOCK_*` code and marks it active with `fault_set_failure()`. Buttons and the timer work, USB doesn't: `usb_task()` sees `hardware_clock_hz() != 24 MHz` and goes to `FAILED` without calling `init_usb()`.
+- **No retry: 4 MHz is final until the next reset.** The waits allow over 10 ms for something the hardware does in microseconds, so a timeout means a hardware or supply fault (a VOS or MSIS that never becomes ready), not a slow start. A second attempt would almost certainly fail the same way, and it would add a branch that can't be tested without forcing the fault on the board. A reset (or the watchdog guard, `error_handling_TODO.md` §5) is the only retry.
 - **TIM2:** `init_timer()` computes `PSC = hardware_clock_hz() / 1000 - 1`: 23 999 at 24 MHz, 3 999 if the clock stayed at 4 MHz. Both fit the 16-bit prescaler, and the tick stays 1 ms either way.
 
 > If you ever go **down** in frequency, reverse the order: lower the clock, then the wait states, then the voltage.

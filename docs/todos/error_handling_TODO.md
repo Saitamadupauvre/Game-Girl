@@ -45,7 +45,7 @@ Closes the `[?]` "how `init_usb()` reports failure" in `usb_TODO.md` §3.
 
 ## 3. Clock init
 
-- [ ] Decide whether a failed `init_hardware_clock()` is retried once, or the 4 MHz fallback is final until the next reset. A VOS or MSIS timeout is almost certainly a hardware or supply fault, so one retry at most.
+- [x] No retry: a failed `init_hardware_clock()` leaves the chip at 4 MHz until the next reset. A VOS or MSIS timeout is almost certainly a hardware or supply fault, so a second attempt would fail the same way. `init_system()` logs the fault and marks it active (`fault_set_failure()`). Rationale in `docs/mcu/drivers/usb.md` §2.
 - [x] Record which step failed (`FAULT_CLOCK_VOS` / `FAULT_CLOCK_MSIS_NOT_READY` / `FAULT_CLOCK_MSIS_RANGE`), so the blink code can tell "no USB because of the clock" from a USB fault. `usb_task()` logs nothing extra in that case.
 
 ## 4. Watchdog (IWDG, RM0456 chapter 61)
