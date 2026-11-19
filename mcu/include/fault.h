@@ -32,6 +32,7 @@ typedef enum {
     FAULT_USB_RX_FLUSH          = 0x25,     // RX FIFO flush timed out
     FAULT_USB_BSESSION          = 0x26,     // GOTGCTL.BSVLD not set after the B-valid override
     FAULT_USB_VDDUSB            = 0x27,     // PWR_SVMSR.VDDUSBRDY never set: VDDUSB absent
+    FAULT_USB_HOST_LOST         = 0x28,     // Bus active but the host made no progress; soft replug
 
     // 0x3_: system / software
     FAULT_SYS_WATCHDOG_LOOP     = 0x30,     // Too many watchdog resets in a row (#42)

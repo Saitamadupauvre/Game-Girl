@@ -40,8 +40,8 @@ Closes the `[?]` "how `init_usb()` reports failure" in `usb_TODO.md` §3.
 - [x] VDDUSB check before `USV` (RM0456 §10.6.3): `UVMEN`, 5 ms wake-up, `VDDUSBRDY`, monitor off → `FAULT_USB_VDDUSB` (`0x27`). On the Nucleo VDDUSB is tied to 3V3 (UM2861 SB30), so it is a wiring check.
 - [x] VBUS override for the Nucleo: `VBDEN = 0`, `GOTGCTL.BVALOEN | BVALOVAL`, wait `BSVLD` → `FAULT_USB_BSESSION` (`0x26`). Without it the core never connects the pull-up, because PA9 is the ST-LINK UART, not VBUS (UM2861 Tables 10, 13). Before this, that failure was silent: `init_usb()` returned `FAULT_NONE` and the host never saw the device.
 - [x] After the last attempt: `usb_task()` stays in `FAILED`, never calls `usb_hid_send_if_changed()`, and the main loop carries on.
-- [ ] Decide on a background retry, e.g. every few seconds, or when VBUS appears (see §7 of `usb_TODO.md`). `usb_task()` is already non-blocking between attempts, but each `init_usb()` call blocks about 30 ms (accepted start-up exception, `timer-layers.md` step 6). Background retry would make that a runtime stall, so it needs `init_usb()` split into stages first.
-- [ ] Runtime last resort, if the host stops talking to an enumerated device: soft replug, `DCTL.SDIS = 1` for about 10 ms, then clear it. The host sees an unplug and enumerates again, without touching the rest of the firmware.
+- [x] ~~Background retry after `FAILED`~~ **Won't do.** Nothing transient can cause `FAILED` on this hardware: VDDUSB is tied to 3V3 (the boot ramp is covered by the monitor wait and the backoff), and VBUS is overridden, so a missing cable never fails `init_usb()`. A retry would repeat a permanent failure and stall the main loop ~30 ms each time. Revisit only if the final PCB powers VDDUSB from VBUS.
+- [ ] Runtime last resort, if the host stops talking to an enumerated device: soft replug, `DCTL.SDIS = 1` for about 10 ms, then clear it, with a retry limit before `FAILED`. The host sees an unplug and enumerates again, without touching the rest of the firmware (#53).
 
 ## 3. Clock init
 

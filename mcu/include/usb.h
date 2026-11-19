@@ -5,6 +5,7 @@
     #include "fault.h"
     #include "inputs.h"
 
+    #include <stdbool.h>
     #include <stdint.h>
 
 typedef enum {
@@ -27,6 +28,13 @@ void hard_reset_usb(void);
 
 // Non-blocking: queues a HID report on EP1 when the buttons changed.
 void usb_hid_send_if_changed(const input_state_t *inputs);
+
+// Soft replug
+bool usb_waiting_for_host(void);    // Bus active and not configured, or EP1 report not collected
+uint32_t usb_host_activity(void);   // ++ on bus reset, SETUP, EP1 report collected
+bool usb_is_configured(void);
+void usb_soft_disconnect(void);     // SDIS on + bus-reset cleanup
+void usb_soft_connect(void);        // SDIS off
 
 void OTG_FS_IRQHandler(void);
 

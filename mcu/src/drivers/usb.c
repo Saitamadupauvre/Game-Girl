@@ -48,6 +48,8 @@ static uint8_t setup_pkt[USB_SETUP_PACKET_SIZE];
 static hid_state_t hid_state;       // Written by apply_setup() in the ISR
 static volatile bool ep1_busy;      // A report is armed on EP1 and not yet sent
 static volatile bool report_pending; // Send the current report even if the buttons did not change
+static volatile bool bus_active;    // Bus reset seen and not suspended
+static volatile uint32_t host_activity; // ++ on bus reset, SETUP, EP1 report collected
 
 static hid_report_t last_sent;      // Main loop only: the last report armed on EP1
 static deadline_t idle_deadline;    // Main loop only: when the idle rate asks for a resend
@@ -396,6 +398,7 @@ static void usb_on_out_ep(void)
     OTG_DOEPINT(0) = flags;     // Write 1 to clear every flag that was read
 
     if ((flags & OTG_DOEPINT_STUP) != 0u) {
+        host_activity++;
         ep0_arm_setup();            // Re-arm first: apply_setup() may arm the status OUT stage
         apply_setup(setup_pkt);
     }
@@ -416,6 +419,7 @@ static void usb_on_in_ep(void)
 
         if ((flags & OTG_DIEPINT_XFRC) != 0u) {
             ep1_busy = false;               // The host collected the report
+            host_activity++;
         }
     }
 }
@@ -426,6 +430,8 @@ void OTG_FS_IRQHandler(void)
 
     if ((sts & OTG_GINTSTS_USBRST) != 0u) {
         usb_on_reset();
+        bus_active = true;
+        host_activity++;
         OTG_GINTSTS = OTG_GINTSTS_USBRST;   // GINTSTS flags are write-1-to-clear
     }
 
@@ -447,12 +453,14 @@ void OTG_FS_IRQHandler(void)
         usb_on_in_ep();     // Cleared through DIEPINT
     }
 
-    // Suspend and wakeup need no action yet, but an unmasked flag left set would retrigger forever
+    // An idle bus is never a stalled host: usb_task() must not replug while suspended
     if ((sts & OTG_GINTSTS_USBSUSP) != 0u) {
+        bus_active = false;
         OTG_GINTSTS = OTG_GINTSTS_USBSUSP;
     }
 
     if ((sts & OTG_GINTSTS_WKUINT) != 0u) {
+        bus_active = true;
         OTG_GINTSTS = OTG_GINTSTS_WKUINT;
     }
 }
@@ -699,5 +707,48 @@ void hard_reset_usb(void)
     // RAM reset.
     ep1_busy = false;
     report_pending = false;
+    bus_active = false;
     hid_reset(&hid_state);
+}
+
+
+/* Soft replug: the policy is in usb_task.c */
+
+bool usb_waiting_for_host(void)
+{
+    if (!bus_active) {
+        return false;   // Suspended or never reset: the host is not expected to do anything
+    }
+
+    if (hid_state.configuration == 0u) {
+        return true;    // Enumeration not finished
+    }
+
+    return ep1_busy;    // A report is armed and the host has not collected it
+}
+
+uint32_t usb_host_activity(void)
+{
+    return host_activity;
+}
+
+bool usb_is_configured(void)
+{
+    return hid_state.configuration == 1u;
+}
+
+void usb_soft_disconnect(void)
+{
+    usb_irq_disable();
+
+    OTG_DCTL |= OTG_DCTL_SDIS;  // Pull-up off: the host sees an unplug
+    usb_on_reset();             // Same state as after a bus reset: EP1 off, address 0, hid_reset()
+    bus_active = false;
+
+    usb_irq_enable();
+}
+
+void usb_soft_connect(void)
+{
+    OTG_DCTL &= ~OTG_DCTL_SDIS; // Pull-up on: the host resets the bus and enumerates again
 }

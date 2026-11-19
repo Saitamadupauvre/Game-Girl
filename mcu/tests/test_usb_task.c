@@ -49,6 +49,13 @@ static uint32_t hard_reset_calls;
 static uint32_t send_calls;
 static const input_state_t *last_sent;
 
+static bool host_waiting;               // usb_waiting_for_host()
+static bool host_configured;            // usb_is_configured()
+static uint32_t host_activity;          // usb_host_activity()
+static bool pullup_on;
+static uint32_t disconnect_calls;
+static uint32_t connect_calls;
+
 uint32_t time_now_ms(void)
 {
     return now_ms;
@@ -86,6 +93,33 @@ void usb_hid_send_if_changed(const input_state_t *inputs)
     last_sent = inputs;
 }
 
+bool usb_waiting_for_host(void)
+{
+    return host_waiting;
+}
+
+uint32_t usb_host_activity(void)
+{
+    return host_activity;
+}
+
+bool usb_is_configured(void)
+{
+    return host_configured;
+}
+
+void usb_soft_disconnect(void)
+{
+    disconnect_calls++;
+    pullup_on = false;
+}
+
+void usb_soft_connect(void)
+{
+    connect_calls++;
+    pullup_on = true;
+}
+
 
 /* ---- Helpers ---- */
 
@@ -102,6 +136,29 @@ static void setup(uint32_t failures, fault_t fault)
     hard_reset_calls = 0;
     send_calls = 0;
     last_sent = NULL;
+
+    // Healthy host by default: configured, nothing pending
+    host_waiting = false;
+    host_configured = true;
+    host_activity = 0;
+    pullup_on = true;
+    disconnect_calls = 0;
+    connect_calls = 0;
+}
+
+// Host stuck: bus active, a report armed on EP1, and the host never collects it
+static void host_stalls(void)
+{
+    host_waiting = true;
+    host_configured = true;
+}
+
+static void run_until_disconnects(uint32_t count)
+{
+    for (uint32_t i = 0; (i < 100000u) && (disconnect_calls < count); i++) {
+        usb_task();
+        now_ms++;
+    }
 }
 
 // One main-loop pass per millisecond, like the firmware's superloop.
@@ -225,6 +282,133 @@ int test_success_clears_earlier_usb_fault(void)
     return 0;
 }
 
+int test_stalled_host_is_replugged(void)
+{
+    setup(0, FAULT_NONE);
+    run_for_ms(10);
+    host_stalls();
+
+    run_for_ms(1980);
+    CHECK_EQUAL_U32(disconnect_calls, 0);
+
+    run_for_ms(30);
+    CHECK_EQUAL_U32(disconnect_calls, 1);
+    CHECK(!pullup_on);
+
+    return 0;
+}
+
+int test_pullup_off_for_100ms(void)
+{
+    setup(0, FAULT_NONE);
+    run_for_ms(10);
+    host_stalls();
+    run_until_disconnects(1);
+
+    const uint32_t sends = send_calls;
+    run_for_ms(99);
+    CHECK_EQUAL_U32(connect_calls, 0);
+    CHECK_EQUAL_U32(send_calls, sends);     // No reports while disconnected
+
+    run_for_ms(2);
+    CHECK_EQUAL_U32(connect_calls, 1);
+    CHECK(pullup_on);
+
+    return 0;
+}
+
+int test_host_activity_prevents_replug(void)
+{
+    // Slow host: waiting, but it makes progress every second
+    setup(0, FAULT_NONE);
+    run_for_ms(10);
+    host_stalls();
+
+    for (uint32_t i = 0; i < 10; i++) {
+        run_for_ms(1000);
+        host_activity++;
+    }
+
+    CHECK_EQUAL_U32(disconnect_calls, 0);
+
+    return 0;
+}
+
+int test_idle_bus_never_replugs(void)
+{
+    // Suspended, or the Pi is booting: the device is not waiting on the host
+    setup(0, FAULT_NONE);
+    host_waiting = false;
+    host_configured = false;
+
+    run_for_ms(20000);
+
+    CHECK_EQUAL_U32(disconnect_calls, 0);
+    CHECK_EQUAL_U32(fault_read_active(FAULT_SUBSYS_USB), FAULT_NONE);
+
+    return 0;
+}
+
+int test_replug_limit_fails(void)
+{
+    setup(0, FAULT_NONE);
+    run_for_ms(10);
+    host_stalls();
+
+    run_for_ms(20000);
+
+    CHECK_EQUAL_U32(disconnect_calls, 3);
+    CHECK_EQUAL_U32(hard_reset_calls, 1);
+    CHECK_EQUAL_U32(fault_read_active(FAULT_SUBSYS_USB), FAULT_USB_HOST_LOST);
+
+    const uint32_t sends = send_calls;
+    run_for_ms(10000);
+    CHECK_EQUAL_U32(disconnect_calls, 3);
+    CHECK_EQUAL_U32(send_calls, sends);
+
+    return 0;
+}
+
+int test_recovery_resets_replug_count(void)
+{
+    setup(0, FAULT_NONE);
+    run_for_ms(10);
+    host_stalls();
+    run_until_disconnects(2);
+    run_for_ms(200);                    // Reconnected
+
+    host_waiting = false;               // The host enumerated and collected the report
+    run_for_ms(10);
+    host_stalls();
+
+    // Without the reset it would fail after 1 more replug; with it, 3 more
+    run_for_ms(30000);
+    CHECK_EQUAL_U32(disconnect_calls, 5);
+    CHECK_EQUAL_U32(fault_read_active(FAULT_SUBSYS_USB), FAULT_USB_HOST_LOST);
+
+    return 0;
+}
+
+int test_unconfigured_does_not_reset_replug_count(void)
+{
+    // Bus going idle between replugs is not a recovery
+    setup(0, FAULT_NONE);
+    run_for_ms(10);
+    host_stalls();
+    run_until_disconnects(2);
+    run_for_ms(200);
+
+    host_waiting = false;
+    host_configured = false;
+    run_for_ms(10);
+    host_stalls();
+
+    run_for_ms(30000);
+    CHECK_EQUAL_U32(disconnect_calls, 3);
+
+    return 0;
+}
+
 int main(void)
 {
     if (test_first_attempt_succeeds() != 0) {
@@ -252,6 +436,34 @@ int main(void)
     }
 
     if (test_success_clears_earlier_usb_fault() != 0) {
+        return 1;
+    }
+
+    if (test_stalled_host_is_replugged() != 0) {
+        return 1;
+    }
+
+    if (test_pullup_off_for_100ms() != 0) {
+        return 1;
+    }
+
+    if (test_host_activity_prevents_replug() != 0) {
+        return 1;
+    }
+
+    if (test_idle_bus_never_replugs() != 0) {
+        return 1;
+    }
+
+    if (test_replug_limit_fails() != 0) {
+        return 1;
+    }
+
+    if (test_recovery_resets_replug_count() != 0) {
+        return 1;
+    }
+
+    if (test_unconfigured_does_not_reset_replug_count() != 0) {
         return 1;
     }
 
