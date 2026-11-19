@@ -24,7 +24,7 @@ Register references are RM0456 Rev 7. Related lists: [`usb_TODO.md`](usb_TODO.md
 
 - [x] One error-code type, `fault_t` in `mcu/include/fault.h`: `0xSN`, high nibble = subsystem (clock, USB, system), low nibble = step. One code per wait that can time out, so a failure names its step.
 - [x] `fault_log()` (`mcu/src/services/fault.c`) keeps the last fault and a saturating count per subsystem. Callers only pass real faults (they check `!= FAULT_NONE` first).
-- [ ] Per-subsystem state (`OK` / `RETRYING` / `FAILED`) readable by the status protocol. USB's state exists but is private to `usb_task.c`; expose a getter when the status protocol needs it.
+- [x] Active fault per subsystem in `fault.c`: `fault_set_failure(code)` when a module degrades (USB entering `FAILED`, the clock falling back to 4 MHz), `fault_clear_failure(subsystem)` when it recovers (USB entering `RUNNING`), `fault_read_active(subsystem)` to read it (`FAULT_NONE` = healthy). `fault_log()` stays as history (last fault, counts); the active flags are current state. Reporters (blink code, status protocol, backup register) read only `fault.c`, never a module's own state: each module handles its own recovery and its state machine stays private (e.g. `usb_task.c`).
 - [x] The `init_*()` functions return `fault_t` instead of `bool`, so the caller learns *which* step failed.
 
 ## 2. USB init: retry, then degrade

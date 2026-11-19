@@ -36,4 +36,9 @@ void OTG_FS_IRQHandler(void);
 // Needs init_hardware_clock(), init_GPIO() and init_timer() first.
 void usb_task(void);
 
+#ifdef GAME_GIRL_HOST_TEST
+// Host tests only: back to the power-on state, so each test starts from STARTING with 0 attempts.
+void usb_task_reset_test(void);
+#endif
+
 #endif

@@ -18,6 +18,7 @@ static void init_system(void)
     const fault_t clock_fault = init_hardware_clock();
     if (clock_fault != FAULT_NONE) {
         fault_log(clock_fault);
+        fault_set_failure(clock_fault);     // 4 MHz fallback lasts until the next reset
     }
 
     init_GPIO();

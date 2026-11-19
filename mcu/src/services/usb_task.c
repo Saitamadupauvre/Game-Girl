@@ -23,6 +23,15 @@ static usb_task_state_t state = USB_TASK_STARTING;
 static uint8_t attempts;
 static deadline_t backoff_timer;
 
+#ifdef GAME_GIRL_HOST_TEST
+void usb_task_reset_test(void)
+{
+    state = USB_TASK_STARTING;
+    attempts = 0;
+    backoff_timer = (deadline_t){0};
+}
+#endif
+
 static void usb_task_start(void)
 {
     // No logging fault here, it fails in init_system()
@@ -34,6 +43,7 @@ static void usb_task_start(void)
     attempts++;
     const fault_t fault = init_usb();
     if (fault == FAULT_NONE) {
+        fault_clear_failure(FAULT_SUBSYS_USB);
         state = USB_TASK_RUNNING;
         return;
     }
@@ -42,6 +52,7 @@ static void usb_task_start(void)
     hard_reset_usb();
 
     if (attempts >= USB_START_ATTEMPTS) {
+        fault_set_failure(fault);
         state = USB_TASK_FAILED;
         return;
     }

@@ -60,5 +60,14 @@ static inline uint8_t fault_step(fault_t f)
 }
 
 void fault_log(fault_t f);
+void fault_clear_failure(fault_subsystem_t subsys);
+void fault_set_failure(fault_t f);
+
+fault_t fault_read_active(fault_subsystem_t subsys);
+
+#ifdef GAME_GIRL_HOST_TEST
+// Host tests only: clear the history and the active faults, as at power-on.
+void fault_reset_test(void);
+#endif
 
 #endif
