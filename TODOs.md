@@ -54,6 +54,8 @@ Host tests `gamegirl-input-tests` and `gamegirl-timer-tests` pass.
 
 ## Hardware checks (when the board is available)
 
+Full list, in bring-up order: [`docs/todos/board_testing_TODO.md`](docs/todos/board_testing_TODO.md).
+
 - [ ] Each button pulls its documented pin low; the pull-ups read high when released.
 - [ ] `init_hardware_clock()` returns `FAULT_NONE` (VOSRDY and MSISRDY set), and TIM2 really ticks every 1 ms at 24 MHz.
 - [ ] Port-E buttons read correctly now that `GPIOE_BASE_NS` is fixed.
