@@ -7,7 +7,6 @@
 
 #include <stdint.h>
 
-
 #define USB_REQUIRED_HCLK_HZ    24000000UL  // usb.c sets TRDT for 24 MHz, and range 3 is needed anyway
 #define USB_START_ATTEMPTS      3u
 #define USB_RETRY_BACKOFF_MS    100UL

@@ -334,6 +334,22 @@
 #define NVIC_ICER2      MMIO32(0xE000E188UL)
 #define NVIC_ICPR2      MMIO32(0xE000E288UL)    // Clear-pending, write 1 to clear
 
+// IWDG. RM0456 61.7. Reset values PR = /4 and RLR = 0xFFF give 4 * 4096 / 32 kHz LSI = ~512 ms
+
+#define IWDG_BASE_NS    0x40003000UL
+#define IWDG_KR_OFFSET  0x00000000UL
+#define IWDG_KR         MMIO32(IWDG_BASE_NS + IWDG_KR_OFFSET)   // Write-only
+
+#define IWDG_KEY_START      0x0000CCCCUL    // Starts the watchdog, forces LSI on. Only a reset stops it
+#define IWDG_KEY_REFRESH    0x0000AAAAUL    // Reloads the counter from RLR
+
+// DBGMCU. RM0456 75.12.4. Writable by software, reset only by power-on reset
+
+#define DBGMCU_BASE             0xE0044000UL
+#define DBGMCU_APB1LFZR_OFFSET  0x00000008UL
+#define DBGMCU_APB1LFZR         MMIO32(DBGMCU_BASE + DBGMCU_APB1LFZR_OFFSET)
+#define DBGMCU_APB1LFZR_DBG_IWDG_STOP   (1UL << 12)     // 1 = IWDG frozen while the core is halted by the debugger
+
 
 /*
  * Generic GPIO bit-field helpers
