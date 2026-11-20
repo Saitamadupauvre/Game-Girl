@@ -62,11 +62,12 @@ Closes the `[?]` "how `init_usb()` reports failure" in `usb_TODO.md` §3.
 Tracked in #42. Degraded-mode table in `docs/mcu/power-and-usb-fallback.md`.
 
 - [x] Registers in `stm32u575_regs.h`: `RCC_CSR` reset flags + `RMVF`, `RCC_APB3ENR.RTCAPBEN`, `PWR_DBPR.DBP`, `TAMP_BKPR(x)`.
+- [x] Backup driver `backup.c`: `init_backup()` (`PWREN`, `DBP`, `RTCAPBEN`), `reset_flags_read_clear()` (returns `RCC_CSR`, then `RMVF`), bounds-checked `backup_read()`/`backup_write()`, `breadcrumb_set()`/`breadcrumb_fetch()`. Slot map in `backup.h`: `BKP_HANG_COUNTS` 0, `BKP_LAST_FAULT` 1, `BKP_BREADCRUMB` 2.
 - [ ] Append `FAULT_SUBSYS_INPUT` (0x4), `FAULT_SUBSYS_I2C` (0x5), `FAULT_SUBSYS_POWER` (0x6) to `fault_subsystem_t`, and add `FAULT_USB_HANG` (0x29).
 - [ ] Breadcrumb in `TAMP_BKPR(2)`: the main loop writes the subsystem before each task and `FAULT_SUBSYS_NONE` at the end. The USB ISR saves it, writes `USB`, and restores it on exit.
 - [ ] Hang counters in `TAMP_BKPR(0)`: one 4-bit counter per subsystem. Backup registers survive a system reset and clear on power-off, so no `.noinit` section is needed.
 - [ ] Pure `reset_guard_decide(csr_flags, breadcrumb, counts)`: an IWDG reset increments the breadcrumb's counter, any other reset clears all counters. A subsystem is disabled at count >= 3 if it is disableable (USB, later I2C). INPUT and POWER never are.
-- [ ] Boot sequence: enable `RTCAPBEN`, read `RCC_CSR`, set `RMVF`, read `BKPR(0)`/`BKPR(2)`, decide, set `DBP`, write `BKPR(0)` back.
+- [ ] `reset_guard_init()` at boot, after `init_timer()` and before `init_watchdog()`: `init_backup()`, `reset_flags_read_clear()`, read the counts and the breadcrumb, decide, write the counts back, set the breadcrumb to `NONE`.
 - [ ] Gate `usb_task()` on the decision; a disabled USB keeps the core in reset and sets `FAULT_USB_HANG` active.
 - [ ] After 10 s of clean running, clear the counters of the subsystems still enabled. A disabled one stays off until the next non-watchdog reset.
 

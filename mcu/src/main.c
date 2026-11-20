@@ -6,6 +6,7 @@
 #include "timer.h"
 #include "usb.h"
 #include "watchdog.h"
+#include "backup.h"
 
 
 /*
@@ -22,6 +23,7 @@ static void init_system(void)
         fault_set_failure(init_fault);     // 4 MHz fallback lasts until the next reset
     }
 
+    init_backup();
     init_GPIO();
     init_timer();
 
