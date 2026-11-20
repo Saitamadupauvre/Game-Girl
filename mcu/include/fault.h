@@ -37,6 +37,7 @@ typedef enum {
     // 0x3_: system / software
     FAULT_SYS_WATCHDOG_LOOP     = 0x30,     // Too many watchdog resets in a row (#42)
     FAULT_SYS_HARDFAULT         = 0x31,     // Reached the HardFault handler (needs startup code, #46)
+    FAULT_SYS_WATCHDOG_CONFIG   = 0x32,     // IWDG_SR never cleared after writing PR/RLR: still runs, on whichever values were applied
 } fault_t;
 
 // The high nibble of a fault_t. Use it as an array index: one counter or state per subsystem.

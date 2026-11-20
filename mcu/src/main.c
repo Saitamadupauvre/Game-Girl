@@ -5,6 +5,7 @@
 #include "inputs.h"
 #include "timer.h"
 #include "usb.h"
+#include "watchdog.h"
 
 
 /*
@@ -15,14 +16,19 @@
 static void init_system(void)
 {
     // init_timer() reads the clock speed it sets. On failure the chip stays at 4 MHz, on succes it goes up to 24Mhz
-    const fault_t clock_fault = init_hardware_clock();
-    if (clock_fault != FAULT_NONE) {
-        fault_log(clock_fault);
-        fault_set_failure(clock_fault);     // 4 MHz fallback lasts until the next reset
+    fault_t init_fault = init_hardware_clock();
+    if (init_fault != FAULT_NONE) {
+        fault_log(init_fault);
+        fault_set_failure(init_fault);     // 4 MHz fallback lasts until the next reset
     }
 
     init_GPIO();
     init_timer();
+
+    init_fault = init_watchdog();
+    if (init_fault != FAULT_NONE) {
+        fault_log(init_fault);
+    }
 }
 
 int main(void)
@@ -30,6 +36,7 @@ int main(void)
     init_system();
 
     for (;;) {
+        kick_watchdog();
         input_task();
         usb_task();
     }

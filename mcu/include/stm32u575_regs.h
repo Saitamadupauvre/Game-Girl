@@ -340,8 +340,25 @@
 #define IWDG_KR_OFFSET  0x00000000UL
 #define IWDG_KR         MMIO32(IWDG_BASE_NS + IWDG_KR_OFFSET)   // Write-only
 
+#define IWDG_PR_OFFSET  0x00000004UL
+#define IWDG_RLR_OFFSET 0x00000008UL
+#define IWDG_SR_OFFSET  0x0000000CUL
+#define IWDG_PR         MMIO32(IWDG_BASE_NS + IWDG_PR_OFFSET)
+#define IWDG_RLR        MMIO32(IWDG_BASE_NS + IWDG_RLR_OFFSET)
+#define IWDG_SR         MMIO32(IWDG_BASE_NS + IWDG_SR_OFFSET)
+
 #define IWDG_KEY_START      0x0000CCCCUL    // Starts the watchdog, forces LSI on. Only a reset stops it
-#define IWDG_KEY_REFRESH    0x0000AAAAUL    // Reloads the counter from RLR
+#define IWDG_KEY_REFRESH    0x0000AAAAUL    // Reloads the counter from RLR, and write-protects PR/RLR
+#define IWDG_KEY_UNLOCK     0x00005555UL    // Allows writes to PR, RLR, WINR, EWCR. Any other key locks them again
+
+#define IWDG_PR_Msk         0xFUL           // PR[3:0]: 0 = /4, 1 = /8, 2 = /16, 3 = /32 ... 6 = /256, >= 7 = /512+
+#define IWDG_RLR_Msk        0xFFFUL         // RL[11:0], must be >= 2
+
+// IWDG_SR: 1 = update still being synchronised into the LSI domain. Wait for IWDG_SR == 0
+#define IWDG_SR_PVU         (1UL << 0)      // Prescaler
+#define IWDG_SR_RVU         (1UL << 1)      // Reload
+#define IWDG_SR_WVU         (1UL << 2)      // Window
+#define IWDG_SR_EWU         (1UL << 3)      // Early wake-up
 
 // DBGMCU. RM0456 75.12.4. Writable by software, reset only by power-on reset
 

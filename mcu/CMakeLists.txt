@@ -5,6 +5,7 @@ add_library(gamegirl-firmware-objects OBJECT
     src/drivers/hardware_clock.c
     src/drivers/gpio.c
     src/drivers/timer.c
+    src/drivers/watchdog.c
     src/common/timer_api.c
     src/services/inputs.c
     src/services/input_task.c
