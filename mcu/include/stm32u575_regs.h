@@ -289,6 +289,26 @@
 #define RCC_AHB2RSTR1   MMIO32(RCC_BASE_NS + RCC_AHB2RSTR1_OFFSET)
 #define RCC_AHB2RSTR1_OTGRST    (1UL << 14)     // Hard OTG_FS reset
 
+// RCC APB3 clock enable (RM0456 11.8.36)
+
+#define RCC_APB3ENR_OFFSET  0x000000A8UL
+#define RCC_APB3ENR     MMIO32(RCC_BASE_NS + RCC_APB3ENR_OFFSET)
+#define RCC_APB3ENR_RTCAPBEN    (1UL << 21)     // RTC and TAMP bus clock: needed to read/write TAMP_BKPxR
+
+// RCC_CSR reset flags (RM0456 11.8.50). Only cleared by a power reset or RMVF, so read then clear every boot.
+// An internal reset also pulls NRST low: PINRSTF is usually set together with IWDGRSTF/SFTRSTF.
+
+#define RCC_CSR_OFFSET  0x000000F4UL
+#define RCC_CSR         MMIO32(RCC_BASE_NS + RCC_CSR_OFFSET)
+#define RCC_CSR_RMVF        (1UL << 23)     // Write 1 to clear every reset flag below
+#define RCC_CSR_OBLRSTF     (1UL << 25)     // Option-byte loader
+#define RCC_CSR_PINRSTF     (1UL << 26)     // NRST pin
+#define RCC_CSR_BORRSTF     (1UL << 27)     // Brownout, includes power-on
+#define RCC_CSR_SFTRSTF     (1UL << 28)     // Software reset (SYSRESETREQ)
+#define RCC_CSR_IWDGRSTF    (1UL << 29)     // Independent watchdog
+#define RCC_CSR_WWDGRSTF    (1UL << 30)     // Window watchdog
+#define RCC_CSR_LPWRRSTF    (1UL << 31)     // Illegal low-power mode entry
+
 // ICLKSEL to select clock src for USB
 
 #define RCC_CCIPR1_OFFSET   0x000000E0UL
@@ -314,6 +334,17 @@
 #define PWR_VOSR_VOS_Msk    (0x3UL << PWR_VOSR_VOS_Pos)
 #define PWR_VOSR_VOS_RANGE3 (0x1UL << PWR_VOSR_VOS_Pos)    // 00 = range 4 (reset), 01 = range 3
 #define PWR_VOSR_VOSRDY     (1UL << 15)
+
+#define PWR_DBPR_OFFSET     0x00000028UL    // RM0456 10.10.11
+#define PWR_DBPR        MMIO32(PWR_BASE_NS + PWR_DBPR_OFFSET)
+#define PWR_DBPR_DBP        (1UL << 0)      // 1 = backup domain (TAMP_BKPxR) writable
+
+// TAMP backup registers (RM0456 64.7.18). Not affected by a system reset (watchdog, pin, software).
+// Cleared by a backup-domain reset: RCC_BDCR.BDRST, or power-on after both VDD and VBAT were off.
+// Reading needs RCC_APB3ENR.RTCAPBEN; writing also needs PWR_DBPR.DBP.
+
+#define TAMP_BASE_NS    0x46007C00UL
+#define TAMP_BKPR(x)    MMIO32(TAMP_BASE_NS + 0x100UL + ((uint32_t)(x) * 0x04UL))  // x = 0..31
 
 // GPIOA
 

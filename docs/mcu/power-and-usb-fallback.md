@@ -103,10 +103,25 @@ VBUS is **not** a "host ready" signal: the Pi 4 powers its USB ports for its who
 
 ### Escalation ladder
 
-1. Retry the init up to 3 times *(v0.1)*, pulsing `RCC_AHB2RSTR1.OTGRST` between attempts, with growing waits.
-2. Runtime only: soft replug (`DCTL.SDIS = 1` for about 10 ms, then clear it).
-3. System reset (`NVIC_SystemReset`). This is safe only because of the latch pull resistor.
-4. After 3 USB-triggered resets in a row *(v0.1)*, stop resetting and stay in degraded mode. The counter is cleared after a clean run (see the reset-loop guard in the error-handling TODO).
+1. Init: retry up to 3 times, pulsing `RCC_AHB2RSTR1.OTGRST` between attempts with a 100 ms backoff. After the last failure, USB stays off (`FAILED`) and the main loop carries on. No system reset.
+2. Runtime: if the bus is active and the host makes no progress for 2 s, soft replug (`DCTL.SDIS = 1` for 100 ms, then clear it). After 3 replugs without a clean run, USB stays off (`FAILED`).
+3. Hangs only: if the firmware stops looping, the IWDG resets the chip (500 ms). This is safe only because of the latch pull resistor. The reset-loop guard below decides what to switch off if it keeps happening.
+
+## Reset-loop guard
+
+The main loop writes a breadcrumb (the `fault_subsystem_t` of the running task) to `TAMP_BKPR(2)` before each task, and the USB ISR does the same while it runs. After a watchdog reset, the boot code reads it and increments that subsystem's 4-bit counter in `TAMP_BKPR(0)`. Any other reset clears the counters, and 10 s of clean running clears those of the subsystems still enabled. Tracked in #42.
+
+Degraded modes, decided here rather than at runtime:
+
+| Breadcrumb | Disableable | After 3 watchdog resets in a row |
+|---|---|---|
+| USB | yes | `usb_task()` skipped, core held in reset, `FAULT_USB_HANG` active |
+| I2C (fuel gauge) | yes, once the driver exists | gauge task skipped, battery "unknown", `FAULT_I2C_HANG` active |
+| POWER | no | log `FAULT_SYS_WATCHDOG_LOOP`, keep rebooting |
+| INPUT | no | same as POWER: no point running without buttons |
+| NONE (main loop itself) | n/a | counted under SYS, nothing disabled |
+
+A disabled subsystem stays off until the next non-watchdog reset. A POWER hang is why the forced power-off should also exist in hardware (see open questions).
 
 ### Degraded mode
 

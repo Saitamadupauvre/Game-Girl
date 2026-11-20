@@ -59,19 +59,25 @@ Closes the `[?]` "how `init_usb()` reports failure" in `usb_TODO.md` §3.
 
 ## 5. Reset cause and reset-loop guard
 
-- [ ] Add `RCC_CSR` (RCC + `0x0F4`, §11.8.50) with its reset flags: `IWDGRSTF` (29), `WWDGRSTF` (30), `SFTRSTF` (28), `BORRSTF` (27), `PINRSTF` (26), and `RMVF` (23) to clear them.
-- [ ] At boot, read the reset cause first, then clear the flags with `RMVF`.
-- [ ] Keep a watchdog-reset counter in memory that survives a reset but not a power-off: a `TAMP` backup register or a `.noinit` RAM section. This depends on the linker script (`usb_TODO.md` §5).
-- [ ] After 3 watchdog resets in a row: boot into degraded mode (USB off), stop rebooting, and report it. Reset the counter after a clean run of, say, 10 s.
+Tracked in #42. Degraded-mode table in `docs/mcu/power-and-usb-fallback.md`.
+
+- [x] Registers in `stm32u575_regs.h`: `RCC_CSR` reset flags + `RMVF`, `RCC_APB3ENR.RTCAPBEN`, `PWR_DBPR.DBP`, `TAMP_BKPR(x)`.
+- [ ] Append `FAULT_SUBSYS_INPUT` (0x4), `FAULT_SUBSYS_I2C` (0x5), `FAULT_SUBSYS_POWER` (0x6) to `fault_subsystem_t`, and add `FAULT_USB_HANG` (0x29).
+- [ ] Breadcrumb in `TAMP_BKPR(2)`: the main loop writes the subsystem before each task and `FAULT_SUBSYS_NONE` at the end. The USB ISR saves it, writes `USB`, and restores it on exit.
+- [ ] Hang counters in `TAMP_BKPR(0)`: one 4-bit counter per subsystem. Backup registers survive a system reset and clear on power-off, so no `.noinit` section is needed.
+- [ ] Pure `reset_guard_decide(csr_flags, breadcrumb, counts)`: an IWDG reset increments the breadcrumb's counter, any other reset clears all counters. A subsystem is disabled at count >= 3 if it is disableable (USB, later I2C). INPUT and POWER never are.
+- [ ] Boot sequence: enable `RTCAPBEN`, read `RCC_CSR`, set `RMVF`, read `BKPR(0)`/`BKPR(2)`, decide, set `DBP`, write `BKPR(0)` back.
+- [ ] Gate `usb_task()` on the decision; a disabled USB keeps the core in reset and sets `FAULT_USB_HANG` active.
+- [ ] After 10 s of clean running, clear the counters of the subsystems still enabled. A disabled one stays off until the next non-watchdog reset.
 
 ## 6. Making failures visible
 
 - [ ] Blink code on the red status LED (`docs/mcu/services/led.md`), e.g. 2 blinks = clock, 3 = USB init, 4 = repeated watchdog resets. Must not clash with the low-battery patterns.
-- [ ] Keep the last `fault_t` in a backup register, so it can be read with the debugger after a reset.
+- [ ] Keep the last `fault_t` in `TAMP_BKPR(1)`, so it can be read with the debugger after a reset. Backup register map: `BKPR(0)` hang counters, `BKPR(1)` last fault, `BKPR(2)` breadcrumb.
 - [ ] Error counters (init retries, watchdog resets, soft replugs) for the status protocol to send to the Pi later (spec §7.2, `TODOs.md` "USB status protocol").
 
 ## 7. Tests
 
 - [ ] Host-test the retry and degrade logic with fake init steps that fail N times: the subsystem ends `OK` after a late success and `FAILED` after 3 failures, and the main-loop path keeps running.
-- [ ] Host-test the reset-loop guard: counter increments on watchdog resets, clears after a clean run, and degraded mode starts at the limit.
+- [ ] Host-test `reset_guard_decide()`: the breadcrumb's counter increments on IWDG resets, other resets clear all counters, USB is disabled at 3, INPUT/POWER/NONE never disable anything, and the clean-run clear skips disabled subsystems.
 - [ ] On the board: force each failure (e.g. skip `PWR_SVMCR.USV`, or block in the main loop to trigger the IWDG) and check the blink code and the recovery.
