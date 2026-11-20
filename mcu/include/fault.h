@@ -33,6 +33,7 @@ typedef enum {
     FAULT_USB_BSESSION          = 0x26,     // GOTGCTL.BSVLD not set after the B-valid override
     FAULT_USB_VDDUSB            = 0x27,     // PWR_SVMSR.VDDUSBRDY never set: VDDUSB absent
     FAULT_USB_HOST_LOST         = 0x28,     // Bus active but the host made no progress; soft replug
+    FAULT_USB_HANG              = 0x29,     // 3 watchdog resets in a row with the USB breadcrumb: USB disabled
 
     // 0x3_: system / software
     FAULT_SYS_WATCHDOG_LOOP     = 0x30,     // Too many watchdog resets in a row (#42)
@@ -40,12 +41,15 @@ typedef enum {
     FAULT_SYS_WATCHDOG_CONFIG   = 0x32,     // IWDG_SR never cleared after writing PR/RLR: still runs, on whichever values were applied
 } fault_t;
 
-// The high nibble of a fault_t. Use it as an array index: one counter or state per subsystem.
+// Which part of the firmware a fault or a breadcrumb points to (high nibble of a fault_t).
 typedef enum {
     FAULT_SUBSYS_NONE   = 0x0,
     FAULT_SUBSYS_CLOCK  = 0x1,
     FAULT_SUBSYS_USB    = 0x2,
     FAULT_SUBSYS_SYS    = 0x3,
+    FAULT_SUBSYS_INPUT  = 0x4,
+    FAULT_SUBSYS_I2C    = 0x5,
+    FAULT_SUBSYS_POWER  = 0x6,
 
     FAULT_SUBSYS_COUNT,                     // Array size, keep last
 } fault_subsystem_t;
