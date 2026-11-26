@@ -131,6 +131,16 @@ separate API only when a caller requires it.
 6. Let USB maintain its own timer and state machine for required delays; USB
    must not reset the shared TIM2 counter or block the main loop.
 
+   **Accepted exception: USB start-up.** `usb_task()` handles retries and
+   backoff with deadlines, but each `init_usb()` call still spins through two
+   fixed hardware waits: 5 ms for the VDDUSB monitor and 25 ms for the
+   device-mode switch. One `usb_task()` call in `STARTING` therefore blocks
+   about 30 ms, at most about 40 ms (a failing step adds one 10 ms timeout),
+   and only up to 3 times at start-up. Nothing needs a faster response at that
+   point: USB is not up yet, and the watchdog timeout is far longer. Split
+   `init_usb()` into stages with `usb_task()` wait states if background retry
+   or a task needing a response under ~30 ms is added.
+
 ## Limits And Guarantees
 
 - TIM2 wraps naturally after approximately 49.7 days at a 1 kHz counter rate.

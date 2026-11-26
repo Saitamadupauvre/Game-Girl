@@ -1,3 +1,19 @@
+/**
+  ******************************************************************************
+  * @file    inputs.c
+  * @brief   Button debouncing and press/release edges.
+  *
+  *          This file provides functions to:
+  *           + Debounce the raw button sample and update the button state
+  ******************************************************************************
+  *
+  * update_input_state() is called once per 1 ms sample with the raw bits from gpio.c. A button
+  * changes state only when it reads the same in all of the last INPUT_DEBOUNCE_SAMPLES samples.
+  * It then sets current (held now), pressed and released (edges since the previous call).
+  *
+  * Pure, tested on the host (tests/test_inputs.c).
+  ******************************************************************************
+  */
 
 #include "inputs.h"
 

@@ -22,7 +22,6 @@
 
 #define RCC_ICSCR1_OFFSET 0x00000008UL   // RCC internal clock sources calibration register 11.8.2
 #define RCC_ICSCR1 MMIO32(RCC_BASE_NS + RCC_ICSCR1_OFFSET)
-#define RCC_ICSCR1 MMIO32(RCC_BASE_NS + RCC_ICSCR1_OFFSET)
 
 // RCC_AHB2ENR1 bits
 
@@ -160,8 +159,10 @@
 // 32-bit push (TX) / pop (RX) port for endpoint n, not RAM
 #define OTG_FIFO(n)     MMIO32(OTG_FS_BASE_NS + 0x1000UL + ((uint32_t)(n) * 0x1000UL))
 
-#define OTG_GOTGCTL_BVALOEN     (1UL << 6)
-#define OTG_GOTGCTL_BVALOVAL    (1UL << 7)
+// OTG_GOTGCTL. RM0456 72.15.1. The B-valid override bits are device-mode only
+#define OTG_GOTGCTL_BVALOEN     (1UL << 6)      // 1 = use BVALOVAL instead of the VBUS pin
+#define OTG_GOTGCTL_BVALOVAL    (1UL << 7)      // Override value: 1 = B-session valid
+#define OTG_GOTGCTL_BSVLD       (1UL << 19)     // Read-only: the B-session state the core sees
 
 #define OTG_GAHBCFG_GINTMSK     (1UL << 0)
 
@@ -282,6 +283,32 @@
 #define RCC_AHB3ENR     MMIO32(RCC_BASE_NS + RCC_AHB3ENR_OFFSET)
 #define RCC_AHB3ENR_PWREN   (1UL << 2)
 
+// RCC AHB2 peripheral reset (RM0456 11.8.22). Set then clear by software: 1 holds the block in reset
+
+#define RCC_AHB2RSTR1_OFFSET    0x00000064UL
+#define RCC_AHB2RSTR1   MMIO32(RCC_BASE_NS + RCC_AHB2RSTR1_OFFSET)
+#define RCC_AHB2RSTR1_OTGRST    (1UL << 14)     // Hard OTG_FS reset
+
+// RCC APB3 clock enable (RM0456 11.8.36)
+
+#define RCC_APB3ENR_OFFSET  0x000000A8UL
+#define RCC_APB3ENR     MMIO32(RCC_BASE_NS + RCC_APB3ENR_OFFSET)
+#define RCC_APB3ENR_RTCAPBEN    (1UL << 21)     // RTC and TAMP bus clock: needed to read/write TAMP_BKPxR
+
+// RCC_CSR reset flags (RM0456 11.8.50). Only cleared by a power reset or RMVF, so read then clear every boot.
+// An internal reset also pulls NRST low: PINRSTF is usually set together with IWDGRSTF/SFTRSTF.
+
+#define RCC_CSR_OFFSET  0x000000F4UL
+#define RCC_CSR         MMIO32(RCC_BASE_NS + RCC_CSR_OFFSET)
+#define RCC_CSR_RMVF        (1UL << 23)     // Write 1 to clear every reset flag below
+#define RCC_CSR_OBLRSTF     (1UL << 25)     // Option-byte loader
+#define RCC_CSR_PINRSTF     (1UL << 26)     // NRST pin
+#define RCC_CSR_BORRSTF     (1UL << 27)     // Brownout, includes power-on
+#define RCC_CSR_SFTRSTF     (1UL << 28)     // Software reset (SYSRESETREQ)
+#define RCC_CSR_IWDGRSTF    (1UL << 29)     // Independent watchdog
+#define RCC_CSR_WWDGRSTF    (1UL << 30)     // Window watchdog
+#define RCC_CSR_LPWRRSTF    (1UL << 31)     // Illegal low-power mode entry
+
 // ICLKSEL to select clock src for USB
 
 #define RCC_CCIPR1_OFFSET   0x000000E0UL
@@ -294,7 +321,13 @@
 #define PWR_BASE_NS     0x46020800UL
 #define PWR_SVMCR_OFFSET    0x00000010UL
 #define PWR_SVMCR       MMIO32(PWR_BASE_NS + PWR_SVMCR_OFFSET)
+#define PWR_SVMCR_IO2SV (1UL << 29)     // VDDIO2 valid: removes PG[15:2] isolation. Mandatory to use PG2 (red LED)
 #define PWR_SVMCR_USV   (1UL << 28)     // VDDUSB valid: removes USB isolation
+#define PWR_SVMCR_UVMEN (1UL << 24)     // VDDUSB voltage monitor enable. RM0456 10.10.5
+
+#define PWR_SVMSR_OFFSET    0x0000003CUL    // RM0456 10.10.16
+#define PWR_SVMSR       MMIO32(PWR_BASE_NS + PWR_SVMSR_OFFSET)
+#define PWR_SVMSR_VDDUSBRDY (1UL << 24)     // VDDUSB above the UVM threshold (~1.2 V), valid while UVMEN = 1
 
 #define PWR_VOSR_OFFSET     0x0000000CUL    // RM0456 10.10.4
 #define PWR_VOSR        MMIO32(PWR_BASE_NS + PWR_VOSR_OFFSET)
@@ -302,6 +335,17 @@
 #define PWR_VOSR_VOS_Msk    (0x3UL << PWR_VOSR_VOS_Pos)
 #define PWR_VOSR_VOS_RANGE3 (0x1UL << PWR_VOSR_VOS_Pos)    // 00 = range 4 (reset), 01 = range 3
 #define PWR_VOSR_VOSRDY     (1UL << 15)
+
+#define PWR_DBPR_OFFSET     0x00000028UL    // RM0456 10.10.11
+#define PWR_DBPR        MMIO32(PWR_BASE_NS + PWR_DBPR_OFFSET)
+#define PWR_DBPR_DBP        (1UL << 0)      // 1 = backup domain (TAMP_BKPxR) writable
+
+// TAMP backup registers (RM0456 64.7.18). Not affected by a system reset (watchdog, pin, software).
+// Cleared by a backup-domain reset: RCC_BDCR.BDRST, or power-on after both VDD and VBAT were off.
+// Reading needs RCC_APB3ENR.RTCAPBEN; writing also needs PWR_DBPR.DBP.
+
+#define TAMP_BASE_NS    0x46007C00UL
+#define TAMP_BKPR(x)    MMIO32(TAMP_BASE_NS + 0x100UL + ((uint32_t)(x) * 0x04UL))  // x = 0..31
 
 // GPIOA
 
@@ -316,10 +360,63 @@
 
 #define GPIO_AF10_USB   0xAUL
 
+// GPIOB User LEDs (UM2861 7.5): LD1 green PC7, LD2 blue PB7, LD3 red PG2. Active high, driven through a transistor.
+
+#define GPIO_BSRR_OFFSET    0x00000018UL    // Write-only: bit n sets pin n, bit n+16 resets it, in one write
+
+#define GPIOB_BASE_NS   0x42020400UL
+#define GPIOC_BASE_NS   0x42020800UL
+#define GPIOG_BASE_NS   0x42021800UL    // PG[15:2] need PWR_SVMCR.IO2SV
+
+#define GPIOB_MODER     MMIO32(GPIOB_BASE_NS + GPIO_MODER_OFFSET)
+#define GPIOB_BSRR      MMIO32(GPIOB_BASE_NS + GPIO_BSRR_OFFSET)
+#define GPIOC_MODER     MMIO32(GPIOC_BASE_NS + GPIO_MODER_OFFSET)
+#define GPIOC_BSRR      MMIO32(GPIOC_BASE_NS + GPIO_BSRR_OFFSET)
+#define GPIOG_MODER     MMIO32(GPIOG_BASE_NS + GPIO_MODER_OFFSET)
+#define GPIOG_BSRR      MMIO32(GPIOG_BASE_NS + GPIO_BSRR_OFFSET)
+
+#define LED_GREEN_PIN   7u      // PC7, LD1
+#define LED_BLUE_PIN    7u      // PB7, LD2
+#define LED_RED_PIN     2u      // PG2, LD3
+
 // NVIC
 
 #define NVIC_ISER2      MMIO32(0xE000E108UL)    // IRQ 64..95
 #define NVIC_ICER2      MMIO32(0xE000E188UL)
+#define NVIC_ICPR2      MMIO32(0xE000E288UL)    // Clear-pending, write 1 to clear
+
+// IWDG. RM0456 61.7. Reset values PR = /4 and RLR = 0xFFF give 4 * 4096 / 32 kHz LSI = ~512 ms
+
+#define IWDG_BASE_NS    0x40003000UL
+#define IWDG_KR_OFFSET  0x00000000UL
+#define IWDG_KR         MMIO32(IWDG_BASE_NS + IWDG_KR_OFFSET)   // Write-only
+
+#define IWDG_PR_OFFSET  0x00000004UL
+#define IWDG_RLR_OFFSET 0x00000008UL
+#define IWDG_SR_OFFSET  0x0000000CUL
+#define IWDG_PR         MMIO32(IWDG_BASE_NS + IWDG_PR_OFFSET)
+#define IWDG_RLR        MMIO32(IWDG_BASE_NS + IWDG_RLR_OFFSET)
+#define IWDG_SR         MMIO32(IWDG_BASE_NS + IWDG_SR_OFFSET)
+
+#define IWDG_KEY_START      0x0000CCCCUL    // Starts the watchdog, forces LSI on. Only a reset stops it
+#define IWDG_KEY_REFRESH    0x0000AAAAUL    // Reloads the counter from RLR, and write-protects PR/RLR
+#define IWDG_KEY_UNLOCK     0x00005555UL    // Allows writes to PR, RLR, WINR, EWCR. Any other key locks them again
+
+#define IWDG_PR_Msk         0xFUL           // PR[3:0]: 0 = /4, 1 = /8, 2 = /16, 3 = /32 ... 6 = /256, >= 7 = /512+
+#define IWDG_RLR_Msk        0xFFFUL         // RL[11:0], must be >= 2
+
+// IWDG_SR: 1 = update still being synchronised into the LSI domain. Wait for IWDG_SR == 0
+#define IWDG_SR_PVU         (1UL << 0)      // Prescaler
+#define IWDG_SR_RVU         (1UL << 1)      // Reload
+#define IWDG_SR_WVU         (1UL << 2)      // Window
+#define IWDG_SR_EWU         (1UL << 3)      // Early wake-up
+
+// DBGMCU. RM0456 75.12.4. Writable by software, reset only by power-on reset
+
+#define DBGMCU_BASE             0xE0044000UL
+#define DBGMCU_APB1LFZR_OFFSET  0x00000008UL
+#define DBGMCU_APB1LFZR         MMIO32(DBGMCU_BASE + DBGMCU_APB1LFZR_OFFSET)
+#define DBGMCU_APB1LFZR_DBG_IWDG_STOP   (1UL << 12)     // 1 = IWDG frozen while the core is halted by the debugger
 
 
 /*
@@ -368,6 +465,10 @@
 
 /* IDR uses one bit per pin. */
 #define GPIO_IDR_PIN_BIT(pin)           (1UL << (uint32_t)(pin))
+
+/* BSRR: set in bits 15:0, reset in bits 31:16. */
+#define GPIO_BSRR_SET(pin)              (1UL << (uint32_t)(pin))
+#define GPIO_BSRR_RESET(pin)            (1UL << ((uint32_t)(pin) + 16UL))
 
 
 #endif

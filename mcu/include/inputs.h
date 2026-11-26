@@ -40,5 +40,14 @@ typedef struct {
 
 void update_input_state(input_state_t *inputs);
 
+// input_task.c (kept out of inputs.c so the debounce test needs no GPIO or timer)
+
+// Non-blocking: every INPUT_UPDATE_PERIOD_MS, samples the button pins and updates the debounced state.
+// Needs init_GPIO() and init_timer() first.
+void input_task(void);
+
+// Latest debounced state, owned by input_task(). Read-only for other tasks.
+const input_state_t *inputs_get(void);
+
 
 #endif

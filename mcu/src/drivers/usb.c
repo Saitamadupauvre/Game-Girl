@@ -1,14 +1,52 @@
+/**
+  ******************************************************************************
+  * @file    usb.c
+  * @brief   USB OTG_FS device driver for the full-speed HID gamepad.
+  *
+  *          This file provides functions to:
+  *           + Start the OTG_FS core in device mode, and hard-reset it
+  *           + Handle the USB interrupt (EP0 control, EP1 report)
+  *           + Send the button report from the main loop
+  *           + Support the soft replug in usb_task.c
+  ******************************************************************************
+  *
+  * What to answer is decided in hid.c; when to start, retry or replug is decided in usb_task.c.
+  *
+  * Start-up, init_usb(): VDDUSB check and USV, HSI48 as the USB clock, PA11/PA12 on AF10, core
+  * soft reset, forced device mode, FIFO sizes, VBUS override (on the Nucleo PA9 is the ST-LINK
+  * UART, not VBUS), then the D+ pull-up. Every wait has a timeout and returns the fault_t of the
+  * step that failed. hard_reset_usb() pulses OTGRST and resets the driver RAM after a failed try.
+  *
+  * Interrupts, OTG_FS_IRQHandler(): bus reset, enumeration done, SETUP and OUT data from the RX
+  * FIFO, EP0 replies, EP1 transfer complete, suspend and resume. It writes the USB breadcrumb
+  * while it runs, so a hang inside it is blamed on USB (reset_guard.c).
+  *
+  * Main loop, usb_hid_send_if_changed(): arms a report on EP1 when the buttons change or the idle
+  * rate asks for a resend.
+  *
+  * Soft replug: usb_waiting_for_host(), usb_host_activity(), usb_soft_disconnect() and
+  * usb_soft_connect().
+  *
+  * Needs HCLK at 24 MHz (GUSBCFG.TRDT). Register access only, no host tests.
+  * Board checks: docs/todos/board_testing_TODO.md §5-7. Design notes: docs/mcu/drivers/usb.md.
+  ******************************************************************************
+  */
 
 #include "stm32u575_regs.h"
 #include "timer_api.h"
 #include "cpu.h"
 #include "usb.h"
 #include "hid.h"
+#include "fault.h"
+#include "backup.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 
+
+#define USB_CORE_TIMEOUT_MS     10UL    // Longest wait for any core flag (wait_comp_setup)
+#define USB_UVM_WAKEUP_MS       5UL     // UVM wake-up, not given in the datasheet: generous margin
 
 #define USB_WORD_BYTES  4u
 #define USB_BITS_PER_BYTE 8u
@@ -44,6 +82,8 @@ static uint8_t setup_pkt[USB_SETUP_PACKET_SIZE];
 static hid_state_t hid_state;       // Written by apply_setup() in the ISR
 static volatile bool ep1_busy;      // A report is armed on EP1 and not yet sent
 static volatile bool report_pending; // Send the current report even if the buttons did not change
+static volatile bool bus_active;    // Bus reset seen and not suspended
+static volatile uint32_t host_activity; // ++ on bus reset, SETUP, EP1 report collected
 
 static hid_report_t last_sent;      // Main loop only: the last report armed on EP1
 static deadline_t idle_deadline;    // Main loop only: when the idle rate asks for a resend
@@ -389,9 +429,10 @@ static void usb_on_out_ep(void)
     }
 
     const uint32_t flags = OTG_DOEPINT(0);
-    OTG_DOEPINT(0) = flags;     // Write-1-to-clear every flag that was read
+    OTG_DOEPINT(0) = flags;     // Write 1 to clear every flag that was read
 
     if ((flags & OTG_DOEPINT_STUP) != 0u) {
+        host_activity++;
         ep0_arm_setup();            // Re-arm first: apply_setup() may arm the status OUT stage
         apply_setup(setup_pkt);
     }
@@ -412,16 +453,23 @@ static void usb_on_in_ep(void)
 
         if ((flags & OTG_DIEPINT_XFRC) != 0u) {
             ep1_busy = false;               // The host collected the report
+            host_activity++;
         }
     }
 }
 
 void OTG_FS_IRQHandler(void)
 {
+    // A hang in here is blamed on USB, not on the task it interrupted. Single exit: restored at the end.
+    const fault_subsystem_t interrupted = breadcrumb_fetch();
+    breadcrumb_set(FAULT_SUBSYS_USB);
+
     const uint32_t sts = OTG_GINTSTS & OTG_GINTMSK;
 
     if ((sts & OTG_GINTSTS_USBRST) != 0u) {
         usb_on_reset();
+        bus_active = true;
+        host_activity++;
         OTG_GINTSTS = OTG_GINTSTS_USBRST;   // GINTSTS flags are write-1-to-clear
     }
 
@@ -443,14 +491,18 @@ void OTG_FS_IRQHandler(void)
         usb_on_in_ep();     // Cleared through DIEPINT
     }
 
-    // Suspend and wakeup need no action yet, but an unmasked flag left set would retrigger forever
+    // An idle bus is never a stalled host: usb_task() must not replug while suspended
     if ((sts & OTG_GINTSTS_USBSUSP) != 0u) {
+        bus_active = false;
         OTG_GINTSTS = OTG_GINTSTS_USBSUSP;
     }
 
     if ((sts & OTG_GINTSTS_WKUINT) != 0u) {
+        bus_active = true;
         OTG_GINTSTS = OTG_GINTSTS_WKUINT;
     }
+
+    breadcrumb_set(interrupted);
 }
 
 
@@ -506,10 +558,27 @@ void usb_hid_send_if_changed(const input_state_t *inputs)
 
 /* Initialisation, in call order */
 
-static void init_usb_power(void)
+/*
+ * RM0456 10.6.3 order: monitor on, wait, VDDUSB present, monitor off, then remove the isolation.
+ * On the Nucleo VDDUSB is tied to 3V3 (UM2861 SB30), so this only catches a wiring fault.
+ */
+static fault_t init_usb_power(void)
 {
     RCC_AHB3ENR |= RCC_AHB3ENR_PWREN;   // PWR clock, needed to write PWR_SVMCR
+    (void)RCC_AHB3ENR;                  // Read back so the clock is running before PWR is accessed
+
+    PWR_SVMCR |= PWR_SVMCR_UVMEN;
+    wait_delay(USB_UVM_WAKEUP_MS);      // UVM wake-up time, not given in the datasheet
+
+    const bool vddusb_ok = wait_comp_setup(&PWR_SVMSR, PWR_SVMSR_VDDUSBRDY, PWR_SVMSR_VDDUSBRDY);
+    PWR_SVMCR &= ~PWR_SVMCR_UVMEN;      // Monitor off either way, its interrupt is not used
+
+    if (!vddusb_ok) {
+        return FAULT_USB_VDDUSB;
+    }
+
     PWR_SVMCR |= PWR_SVMCR_USV;         // VDDUSB valid, removes the USB isolation
+    return FAULT_NONE;
 }
 
 static void enable_usb_pins(void)
@@ -538,30 +607,32 @@ static bool enable_OTG_FS_clocks(void)
     RCC_CCIPR1 &= ~RCC_CCIPR1_ICLKSEL_Msk;  // ICLKSEL = 00 selects HSI48 as the USB kernel clock
 
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_OTGEN;     // Enables the OTG_FS peripheral clock
+
     return true;
 }
 
-static bool soft_reset_usb_core(void)
+static fault_t soft_reset_usb_core(void)
 {
     // The AHB master must be idle before a core reset
     if (!wait_comp_setup(&OTG_GRSTCTL, OTG_GRSTCTL_AHBIDL, OTG_GRSTCTL_AHBIDL)) {
-        return false;
+        return FAULT_USB_AHB_IDLE;
     }
 
     OTG_GRSTCTL |= OTG_GRSTCTL_CSRST;   // Core soft reset, the core clears CSRST when done. RM0456 72.15.5
     if (!wait_comp_setup(&OTG_GRSTCTL, OTG_GRSTCTL_CSRST, 0u)) {
-        return false;
+        return FAULT_USB_CORE_RESET;
     }
 
-    return true;
+    return FAULT_NONE;
 }
 
-static bool enable_usb_cores(void)
+static fault_t enable_usb_cores(void)
 {
     OTG_GUSBCFG |= OTG_GUSBCFG_PHYSEL;  // Selects the embedded full-speed PHY, normally already set. RM0456 72.15.4
 
-    if (!soft_reset_usb_core()) {
-        return false;
+    const fault_t fault = soft_reset_usb_core();
+    if (fault != FAULT_NONE) {
+        return fault;
     }
     OTG_GCCFG |= OTG_GCCFG_PWRDWN;  // 1 = transceiver powered. RM0456 72.15.15
 
@@ -577,20 +648,26 @@ static bool enable_usb_cores(void)
     OTG_GUSBCFG &= ~OTG_GUSBCFG_FHMOD;
     OTG_GUSBCFG |= OTG_GUSBCFG_FDMOD;
 
-    // The mode change takes up to 25 ms
+    // The mode change takes up to 25 ms. Blocking on purpose: accepted start-up exception (timer-layers.md step 6)
     wait_delay(USB_WAIT_PERIOD_MS);
-    if ((OTG_GINTSTS & OTG_GINTSTS_CMOD) != 0u) {   // CMOD: 0 = device mode, 1 = host mode, so 1 means the force failed. RM0456 72.15.6
-        return false;
+    if ((OTG_GINTSTS & OTG_GINTSTS_CMOD) != 0u) {   // CMOD: 0 = device mode, 1 = host mode. RM0456 72.15.6
+        return FAULT_USB_DEVICE_MODE;
     }
 
-    return true;
+    return FAULT_NONE;
 }
 
-static bool init_usb_device(void)
+static fault_t init_usb_device(void)
 {
-    OTG_GCCFG |= OTG_GCCFG_VBDEN;   // B-session valid comes from VBUS sensing on PA9 (OTG_FS_VBUS)
-
     OTG_DCTL |= OTG_DCTL_SDIS;      // Soft-disconnect from the host until the rest of the setup is done
+
+    // No VBUS on PA9 (Nucleo), so no VBUS sensing: BVALOEN = use BVALOVAL instead, BVALOVAL = B-session valid
+    OTG_GCCFG &= ~OTG_GCCFG_VBDEN;
+    OTG_GOTGCTL |= OTG_GOTGCTL_BVALOEN | OTG_GOTGCTL_BVALOVAL;
+
+    if (!wait_comp_setup(&OTG_GOTGCTL, OTG_GOTGCTL_BSVLD, OTG_GOTGCTL_BSVLD)) {
+        return FAULT_USB_BSESSION;
+    }
     OTG_PCGCCTL = 0;                // Clears the power and clock gating bits
 
     // Clear device speed, device address and periodic frame interval, then select full speed
@@ -602,8 +679,12 @@ static bool init_usb_device(void)
     OTG_DIEPTXF0 = ((uint32_t)USB_TX0_FIFO_SIZE << OTG_DIEPTXF_DEPTH_Pos) | USB_TX0_FIFO_START;
     OTG_DIEPTXF1 = ((uint32_t)USB_TX1_FIFO_SIZE << OTG_DIEPTXF_DEPTH_Pos) | USB_TX1_FIFO_START;
 
-    if (!tx_fifo_flush(OTG_GRSTCTL_TXFNUM_ALL) || !rx_fifo_flush()) {
-        return false;
+    if (!tx_fifo_flush(OTG_GRSTCTL_TXFNUM_ALL)) {
+        return FAULT_USB_TX_FLUSH;
+    }
+
+    if (!rx_fifo_flush()) {
+        return FAULT_USB_RX_FLUSH;
     }
 
     // Mask the endpoint interrupts while the endpoints are cleared
@@ -626,19 +707,88 @@ static bool init_usb_device(void)
 
     OTG_DCTL &= ~OTG_DCTL_SDIS;     // Enables the D+ pull-up so the host can see our device.
 
-    return true;
+    return FAULT_NONE;
 }
 
-void init_usb(void)
+// Returns FAULT_NONE once the device is connected, or the fault of the first step that timed out.
+fault_t init_usb(void)
 {
-    init_usb_power();
+    fault_t fault = init_usb_power();
+    if (fault != FAULT_NONE) {
+        return fault;
+    }
+
     enable_usb_pins();
 
-    if (!enable_OTG_FS_clocks() || !enable_usb_cores()) {
-        return;
+    if (!enable_OTG_FS_clocks()) {
+        return FAULT_USB_HSI48;
     }
 
-    if (!init_usb_device()) {
-        return;
+    fault = enable_usb_cores();
+    if (fault != FAULT_NONE) {
+        return fault;
     }
+
+    return init_usb_device();
+}
+
+void hard_reset_usb(void)
+{
+    // Hardware reset.
+    usb_irq_disable();
+
+    OTG_DCTL |= OTG_DCTL_SDIS;  // Clean disconnect from host before hard resetting.
+
+    RCC_AHB2RSTR1 |= RCC_AHB2RSTR1_OTGRST;  // Hard OTG_FS resets RM0456 11.8.22 bit 14
+    RCC_AHB2RSTR1 &= ~RCC_AHB2RSTR1_OTGRST;    // Release the reset to run init_usb() again.
+
+    NVIC_ICPR2 = 1UL << (OTG_FS_IRQ_NUM - 64U);
+
+    // RAM reset.
+    ep1_busy = false;
+    report_pending = false;
+    bus_active = false;
+    hid_reset(&hid_state);
+}
+
+
+/* Soft replug: the policy is in usb_task.c */
+
+bool usb_waiting_for_host(void)
+{
+    if (!bus_active) {
+        return false;   // Suspended or never reset: the host is not expected to do anything
+    }
+
+    if (hid_state.configuration == 0u) {
+        return true;    // Enumeration not finished
+    }
+
+    return ep1_busy;    // A report is armed and the host has not collected it
+}
+
+uint32_t usb_host_activity(void)
+{
+    return host_activity;
+}
+
+bool usb_is_configured(void)
+{
+    return hid_state.configuration == 1u;
+}
+
+void usb_soft_disconnect(void)
+{
+    usb_irq_disable();
+
+    OTG_DCTL |= OTG_DCTL_SDIS;  // Pull-up off: the host sees an unplug
+    usb_on_reset();             // Same state as after a bus reset: EP1 off, address 0, hid_reset()
+    bus_active = false;
+
+    usb_irq_enable();
+}
+
+void usb_soft_connect(void)
+{
+    OTG_DCTL &= ~OTG_DCTL_SDIS; // Pull-up on: the host resets the bus and enumerates again
 }

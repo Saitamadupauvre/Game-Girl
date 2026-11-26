@@ -1,3 +1,6 @@
+# Host-only hooks such as usb_task_reset_test() and fault_reset_test(); never defined in firmware builds
+add_compile_definitions(GAME_GIRL_HOST_TEST)
+
 add_executable(gamegirl-input-tests
     test_inputs.c
     ../src/drivers/gpio.c
@@ -42,3 +45,42 @@ target_compile_features(gamegirl-led-tests PRIVATE c_std_17)
 gamegirl_enable_warnings(gamegirl-led-tests)
 
 add_test(NAME gamegirl-led-tests COMMAND gamegirl-led-tests)
+
+add_executable(gamegirl-fault-tests
+    test_fault.c
+    ../src/services/fault.c
+)
+
+target_include_directories(gamegirl-fault-tests PRIVATE ../include)
+target_compile_features(gamegirl-fault-tests PRIVATE c_std_17)
+gamegirl_enable_warnings(gamegirl-fault-tests)
+
+add_test(NAME gamegirl-fault-tests COMMAND gamegirl-fault-tests)
+
+# usb.c and hardware_clock.c are not linked: test_usb_task.c fakes the functions usb_task.c calls
+add_executable(gamegirl-usb-task-tests
+    test_usb_task.c
+    ../src/services/usb_task.c
+    ../src/services/fault.c
+    ../src/common/timer_api.c
+)
+
+target_include_directories(gamegirl-usb-task-tests PRIVATE ../include)
+target_compile_features(gamegirl-usb-task-tests PRIVATE c_std_17)
+gamegirl_enable_warnings(gamegirl-usb-task-tests)
+
+add_test(NAME gamegirl-usb-task-tests COMMAND gamegirl-usb-task-tests)
+
+# backup.c and timer.c are not linked: test_reset_guard.c fakes the registers and the clock
+add_executable(gamegirl-reset-guard-tests
+    test_reset_guard.c
+    ../src/services/reset_guard.c
+    ../src/services/fault.c
+    ../src/common/timer_api.c
+)
+
+target_include_directories(gamegirl-reset-guard-tests PRIVATE ../include)
+target_compile_features(gamegirl-reset-guard-tests PRIVATE c_std_17)
+gamegirl_enable_warnings(gamegirl-reset-guard-tests)
+
+add_test(NAME gamegirl-reset-guard-tests COMMAND gamegirl-reset-guard-tests)

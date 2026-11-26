@@ -37,19 +37,25 @@ The §2 clock registers (`RCC_ICSCR1`, `RCC_CR.MSISRDY`, `PWR_VOSR`) are defined
 ## 0. Big picture
 
 ```text
-boot
+boot: init_system()  (main.c, runs once)
  ├─ init_hardware_clock()   VOS range 3, then HCLK 4 → 24 MHz (USB FS needs ≥ 14.2 MHz)
- ├─ init_timer()            (TIM2 prescaler comes from hardware_clock_hz())
- ├─ init_usb()              (skipped if init_hardware_clock() failed)
- │   ├─ power   : PWR clock on, VDDUSB valid (USV)
- │   ├─ pins    : PA11/PA12 → AF10
- │   ├─ clocks  : HSI48 on, ICLKSEL = HSI48, OTG clock on
- │   ├─ core    : PHYSEL → soft reset → PWRDWN → force device mode
- │   ├─ device  : VBUS config, DCFG, FIFOs, flush, masks, NVIC
- │   └─ connect : clear DCTL.SDIS
- └─ main loop
-     ├─ update_input_state()
-     └─ usb_hid_send_if_changed()      (non-blocking)
+ ├─ init_GPIO()
+ └─ init_timer()            (TIM2 prescaler comes from hardware_clock_hz())
+
+main loop  (superloop, every task returns quickly)
+ ├─ input_task()            every 1 ms: read pins, debounce (inputs_get() returns the state)
+ └─ usb_task()              (services/usb_task.c)
+     ├─ STARTING : clock not at 24 MHz → FAILED, else init_usb()
+     │   ├─ power   : PWR clock on, VDDUSB valid (USV)
+     │   ├─ pins    : PA11/PA12 → AF10
+     │   ├─ clocks  : HSI48 on, ICLKSEL = HSI48, OTG clock on
+     │   ├─ core    : PHYSEL → soft reset → PWRDWN → force device mode
+     │   ├─ device  : VBUS config, DCFG, FIFOs, flush, masks, NVIC
+     │   └─ connect : clear DCTL.SDIS
+     │   ok → RUNNING;  fault → fault_log(), then BACKOFF (100 ms), or FAILED after 3 attempts
+     ├─ BACKOFF  : wait without blocking, then STARTING
+     ├─ RUNNING  : usb_hid_send_if_changed(inputs_get())   (non-blocking)
+     └─ FAILED   : nothing, the rest of the loop keeps running
 
 OTG_FS_IRQHandler  (all enumeration happens here)
  ├─ USBRST   → reset endpoints, hid_reset(), arm EP0 OUT for SETUP
@@ -103,11 +109,12 @@ The code is split by layer, the same way `gpio.c` (registers) and `inputs.c` (lo
 ```text
 mcu/
 ├─ include/
-│  ├─ usb.h              init_usb(), usb_hid_send_if_changed(), OTG_FS_IRQHandler(), usb_reply_t
+│  ├─ usb.h              init_usb(), usb_hid_send_if_changed(), OTG_FS_IRQHandler(), usb_reply_t, usb_task()
 │  └─ hid.h              hid_report_t, hid_state_t, hid_pack(), hid_reset(), hid_handle_setup()
 ├─ src/
 │  ├─ drivers/usb.c      everything that touches OTG_FS registers
-│  └─ services/hid.c     pure logic: no registers, runs on the PC
+│  ├─ services/hid.c     pure logic: no registers, runs on the PC
+│  └─ services/usb_task.c start-up policy: retries, backoff, FAILED; sends reports once running
 └─ tests/test_hid.c      host tests for hid.c
 ```
 
@@ -159,6 +166,7 @@ This is why turning HSI48 on (`HSI48ON`) is not enough. That only starts the osc
 | **TIM2 follows the clock** | TIM2 counts ticks of its bus clock. If HCLK goes from 4 to 24 MHz and the prescaler stays the same, the "1 ms" tick becomes 1/6 ms and every `deadline_t` expires six times too early, including the USB timeouts. `timer.c` computes the prescaler from `hardware_clock_hz()`, so the two can't disagree. |
 | **PWR clock (`PWREN`)** | The PWR block is a peripheral like any other. Its registers ignore writes until its bus clock is on. |
 | **`PWR_SVMCR.USV`** | The USB pins are powered by a separate supply rail, **VDDUSB** (3.3 V). The U5 keeps that domain electrically isolated until software sets `USV` to say "VDDUSB is present and valid". The isolation protects the chip on boards where VDDUSB might be absent. Until the bit is set, the USB transceiver and the PA11/PA12 pads are disconnected from the core, so nothing reaches the wire. |
+| **VDDUSB monitor (`UVMEN`, `VDDUSBRDY`)** | RM0456 §10.6.3 checks that VDDUSB is really there before `USV` is set: monitor on, wait, `VDDUSBRDY`, monitor off. The monitor trips at about 1.2 V, so it catches a **missing** rail, not a low one (USB needs 3.0–3.6 V). On the Nucleo, VDDUSB is tied to 3V3 through SB30 (UM2861 Table 9), so the check only catches a wiring fault (`FAULT_USB_VDDUSB`). |
 | **HSI48** | Full-speed USB runs at 12 Mbit/s, and the core samples it with a 48 MHz clock (4× oversampling). The rate must be within **±0.25 %** (USB 2.0 spec). HSI48 is an internal RC oscillator designed for this. |
 | **CRS (optional)** | An RC oscillator drifts with temperature. The host sends a Start-of-Frame packet exactly every 1 ms, and CRS uses those as a reference to trim HSI48 continuously. Without CRS it usually works, but it can be the cause of flaky enumeration. |
 
@@ -185,7 +193,7 @@ This is why turning HSI48 on (`HSI48ON`) is not enough. That only starts the osc
 
 | Step | Why |
 |---|---|
-| **VBUS sensing (`VBDEN`) / `BVALOEN`+`BVALOVAL`** | The USB spec forbids a device from switching on its D+ pull-up unless the host is supplying VBUS. A self-powered device must never push current into an unpowered host. So the core won't connect until it sees a valid VBUS on the sense pin (PA9). `usb.c` uses this: it sets `GCCFG.VBDEN`, so **the board must wire the connector's VBUS to PA9**, otherwise the core thinks no cable is plugged in and **never connects**. The fallback is the override bits `BVALOEN`+`BVALOVAL`, which tell the core "VBUS is valid". The trade-off: the core can no longer detect an unplug, so the battery-powered Game GIRL would keep its pull-up on with no cable attached. That's harmless in practice, and `usb_mock.c` uses it. |
+| **VBUS override (`BVALOEN`+`BVALOVAL`)** | The core only connects the D+ pull-up once **B-session valid** is 1, i.e. it has seen the host's 5 V on VBUS (RM0456 §72.6.2, Powered state). With `GCCFG.VBDEN` it reads that from PA9. On the Nucleo, PA9 is the ST-LINK UART and VBUS goes to PC2 for UCPD (UM2861 Tables 10 and 13), so sensing would never see the cable and the device would **never connect**, with no fault. `usb.c` turns sensing off and sets `GOTGCTL.BVALOEN` (use the override) + `BVALOVAL` (value = valid), then waits for `BSVLD` (`FAULT_USB_BSESSION`). The trade-off: no VBUS-loss detection. An unplug still shows up as bus idle (`USBSUSP`), and a replug as `USBRST`. `HNPCAP`/`SRPCAP` must stay 0, or the VBUS comparators turn on regardless of `VBDEN` (§72.15.15). For the Game Girl PCB: decide then whether to route VBUS to PA9. |
 | **`DCTL.SDIS` during setup** | A full-speed device announces itself by pulling **D+ high through 1.5 kΩ**. The host detects that and starts enumerating straight away. Keep the device "soft-disconnected" until FIFOs, masks and the IRQ are ready, or the host sends requests nobody is ready to answer. |
 | **`DCFG.DSPD = full speed`** | The core can also run at high speed with an external PHY. This tells it to use 12 Mbit/s full speed. |
 | **FIFO sizes** | The core has one block of dedicated packet RAM (1.25 KB = 320 words, separate from the main SRAM), and software decides how it is split. **RX** is a single shared FIFO, because every OUT and SETUP packet arrives in one queue, tagged with a status word saying which endpoint it belongs to. **Each IN endpoint gets its own TX FIFO**, so a gamepad report waiting on EP1 can't block an EP0 reply during enumeration. If two regions overlap, packets corrupt each other. |
@@ -319,24 +327,25 @@ Two smaller side effects of the read-modify-write:
 ### Sequence
 
 ```text
-init_hardware_clock() -> bool:                  // first call in main(), before init_timer()
+init_hardware_clock() -> fault_t:               // first call in init_system(), before init_timer()
     // 1. Voltage first (RM0456 §10.5.4 order: VOS, wait states, then frequency)
     RCC_AHB3ENR |= PWREN;  (void)RCC_AHB3ENR    // PWR clock on; read back so it's running
     PWR_VOSR.VOS = 01 (range 3)
-    wait until PWR_VOSR.VOSRDY                  // timeout → return false, stay at 4 MHz
+    wait until PWR_VOSR.VOSRDY                  // timeout → FAULT_CLOCK_VOS, stay at 4 MHz
 
     // 2. Wait states: nothing to do (0 WS covers range 3 at 24 MHz)
 
     // 3. Frequency
-    wait until RCC_CR.MSISRDY                   // range must not change while not ready
+    wait until RCC_CR.MSISRDY                   // range must not change while not ready → FAULT_CLOCK_MSIS_NOT_READY
     RCC_ICSCR1 = (ICSCR1 & ~MSISRANGE) | MSISRANGE_24MHZ | MSIRGSEL
-    wait until RCC_CR.MSISRDY                   // oscillator settled on the new range
+    wait until RCC_CR.MSISRDY                   // oscillator settled on the new range → FAULT_CLOCK_MSIS_RANGE
 
-    hclk_hz = 24 MHz;  return true
+    hclk_hz = 24 MHz;  return FAULT_NONE
 ```
 
 - **Timeouts:** TIM2 isn't running yet, so `deadline_t` can't be used. The waits count 100 000 loop passes, well over 10 ms at 4 MHz. The hardware needs microseconds.
-- **On failure** the chip stays at 4 MHz. Buttons and the timer work, USB doesn't, so `main()` skips `init_usb()`.
+- **On failure** the chip stays at 4 MHz and `init_system()` logs the `FAULT_CLOCK_*` code and marks it active with `fault_set_failure()`. Buttons and the timer work, USB doesn't: `usb_task()` sees `hardware_clock_hz() != 24 MHz` and goes to `FAILED` without calling `init_usb()`.
+- **No retry: 4 MHz is final until the next reset.** The waits allow over 10 ms for something the hardware does in microseconds, so a timeout means a hardware or supply fault (a VOS or MSIS that never becomes ready), not a slow start. A second attempt would almost certainly fail the same way, and it would add a branch that can't be tested without forcing the fault on the board. A reset (or the watchdog guard, `error_handling_TODO.md` §5) is the only retry.
 - **TIM2:** `init_timer()` computes `PSC = hardware_clock_hz() / 1000 - 1`: 23 999 at 24 MHz, 3 999 if the clock stayed at 4 MHz. Both fit the 16-bit prescaler, and the tick stays 1 ms either way.
 
 > If you ever go **down** in frequency, reverse the order: lower the clock, then the wait states, then the voltage.
@@ -346,11 +355,13 @@ init_hardware_clock() -> bool:                  // first call in main(), before 
 ## 3. `init_usb()` — power, pins, clocks
 
 ```text
-usb_power_init():
-    RCC.AHB3ENR |= PWREN                        // already done in init_hardware_clock, harmless
-    PWR.SVMCR   |= USV                          // bit 28, SVMCR @ 0x10   ✔ CMSIS
-                                                // = HAL_PWREx_EnableVddUSB ✔ HAL
-    // Optional: UVMEN (bit 24) enables the VDDUSB monitor, then wait for UVMRDY ⚠ RM
+init_usb_power() -> fault_t:                    // RM0456 §10.6.3 sequence
+    RCC.AHB3ENR |= PWREN;  (void)RCC.AHB3ENR    // already on from init_hardware_clock, harmless
+    PWR.SVMCR   |= UVMEN                        // bit 24: VDDUSB monitor on
+    wait 5 ms                                   // UVM wake-up time, not given in DS13737
+    wait SVMSR.VDDUSBRDY (bit 24, SVMSR @ 0x3C) // timeout → FAULT_USB_VDDUSB (monitor off first)
+    PWR.SVMCR   &= ~UVMEN                       // monitor off, its interrupt is not used
+    PWR.SVMCR   |= USV                          // bit 28, SVMCR @ 0x10: remove the VDDUSB isolation
 
 usb_pins_init():
     RCC.AHB2ENR1 |= GPIOAEN                     // bit 0 (already in regs.h)
@@ -407,14 +418,13 @@ usb_core_init():
 
 ```text
 usb_device_init():
-    // --- VBUS: the Pi supplies it, and the board wires it to PA9 (OTG_FS_VBUS) ---
-    GCCFG   |= VBDEN                            // bit 21: sense VBUS on PA9. Leave PA9 unconfigured.
-                                                // usb.c does this, no override needed
-    // Fallback if the board does NOT wire VBUS to PA9 (this is what usb_mock.c does):  ✔ HAL
-    //     GCCFG   &= ~VBDEN
-    //     GOTGCTL |= BVALOEN | BVALOVAL        // bits 6, 7: pretend VBUS is valid
-
     DCTL     |= SDIS                            // bit 1: stay disconnected during setup
+
+    // --- VBUS: not wired to PA9 on the Nucleo (UM2861 Tables 10, 13), so override it ---
+    GCCFG   &= ~VBDEN                           // bit 21: no VBUS sensing on PA9
+    GOTGCTL |= BVALOEN | BVALOVAL               // bits 6, 7: B-session valid = 1 (device mode only,
+                                                // so after force_device_mode)   ✔ RM0456 §72.15.1
+    wait GOTGCTL.BSVLD (bit 19)                 // timeout → FAULT_USB_BSESSION
     PCGCCTL   = 0                               // restart PHY clock
 
     DCFG: DSPD (bits 1:0) = 0b11 → full speed (embedded PHY)       ✔ CMSIS / HAL

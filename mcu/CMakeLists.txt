@@ -5,11 +5,18 @@ add_library(gamegirl-firmware-objects OBJECT
     src/drivers/hardware_clock.c
     src/drivers/gpio.c
     src/drivers/timer.c
+    src/drivers/watchdog.c
+    src/drivers/backup.c
     src/common/timer_api.c
     src/services/inputs.c
+    src/services/input_task.c
     src/drivers/usb.c
+    src/services/usb_task.c
     src/services/hid.c
     src/services/led.c
+    src/services/led_task.c
+    src/services/fault.c
+    src/services/reset_guard.c
 )
 
 target_include_directories(gamegirl-firmware-objects PRIVATE include)
