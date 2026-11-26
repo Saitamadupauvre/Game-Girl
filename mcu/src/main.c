@@ -1,3 +1,23 @@
+/**
+  ******************************************************************************
+  * @file    main.c
+  * @brief   Firmware entry point: start-up, then the superloop.
+  *
+  *          This file provides functions to:
+  *           + Initialise the drivers and services in order
+  *           + Run the tasks forever, one pass at a time
+  ******************************************************************************
+  *
+  * Start-up order: backup domain first (so even a clock fault is saved), clock, GPIO, timer,
+  * reset guard, then the watchdog last. A failed init does not stop the boot: the module falls
+  * back (the clock stays at 4 MHz) and the fault is logged. USB is not started here but by
+  * usb_task(), which retries on its own.
+  *
+  * Superloop: kick the watchdog, run the reset guard, then each task. No task blocks. Before each
+  * task a breadcrumb names the subsystem, so after a watchdog reset reset_guard.c knows which one
+  * hung and can disable it (USB only).
+  ******************************************************************************
+  */
 
 #include "fault.h"
 #include "gpio.h"
@@ -10,11 +30,6 @@
 #include "backup.h"
 #include "reset_guard.h"
 
-
-/*
- * Non tasks are iniated here. Either they fail and use a fallback (hardware clock speed) or they work.
- * USB start up code is found in usb_task in /src/services/usb_task.c
- */
 
 static void handle_tasks(void)
 {
