@@ -80,11 +80,11 @@ Tracked in #43.
 - [x] LED registers in `stm32u575_regs.h`: GPIOB/C/G bases, `MODER`/`BSRR`, `GPIO_BSRR_SET`/`RESET`, `PWR_SVMCR.IO2SV`, LED pins (UM2861 §7.5: LD1 green PC7, LD2 blue PB7, LD3 red PG2, active high).
 - [x] `fault_log()` also writes `TAMP_BKPR(BKP_LAST_FAULT)`, so the last fault can be read with the debugger after a reset (`x/wx 0x46007D04`). Move `init_backup()` to the top of `init_system()` so a clock fault is saved too. Add a `backup_write()` fake to `test_fault.c` and `test_usb_task.c`.
 - [x] `fault_first_active()` in `fault.c`: the first non-`NONE` active fault, in subsystem order (a clock fault also stops USB, so it is the real cause).
-- [x] Fault codes on their own LED: `fault_led` (blue, LD2 on the Nucleo) in `led_output_t`, `active_fault` in `led_input_t`. Red and green keep the battery/charger policy, so no clash and no priority rules. Pattern: N flashes (200 ms on, 300 ms off), then a 1.5 s pause, stateless from `now_ms`. Codes: 2 = clock fallback (`0x10`–`0x12`), 3 = USB start-up (`0x20`–`0x27`), 4 = host lost (`0x28`), 5 = USB disabled by the reset guard (`0x29`). No active fault or an unknown code = off.
+- [x] Fault codes on their own LED: `fault_led` (blue, LD2 on the Nucleo) in `led_output_t`, `active_fault` in `led_input_t`. Red and green keep the battery/charger policy, so no clash and no priority rules. Pattern: N flashes (500 ms slots, 200 ms lit), then a 1.5 s pause, stateless from `now_ms`. Codes: 2 = clock fallback (`0x10`–`0x12`), 3 = USB start-up (`0x20`–`0x27`), 4 = host lost (`0x28`), 5 = USB disabled by the reset guard (`0x29`). No active fault or an unknown code = off.
 - [x] Host tests in `test_led.c` (N flashes per period per code, off when healthy, red/green unchanged) and `test_fault.c` (`fault_first_active()`, last fault written to the backup slot).
-- [ ] `led.md`: third LED, blink table, timing.
-- [ ] PCB: add a third (fault) LED. Port G pins 2–15 need `IO2SV`, so prefer other ports for the LEDs.
-- [ ] LED GPIO driver (applies `led_output_t` to PC7/PB7/PG2, sets `IO2SV` before PG2). Separate from #43's pure logic.
+- [x] `led.md`: third LED, blink table, timing.
+- [ ] PCB: add a third (fault) LED. Port G pins 2–15 need `IO2SV` and a powered VDDIO2 pin, so prefer other ports for the LEDs.
+- [x] LED GPIO driver: `set_GPIO_led_pins()` and `write_GPIO_leds()` in `gpio.c` (PC7/PB7/PG2, `IO2SV` set first), driven by `led_task()` in `led_task.c`, which the main loop runs last.
 - [ ] ~~Error counters for the status protocol~~ Moved to #17: `fault_count[]`, the reset guard's hang counts and the replug count already exist; nothing reads them until the protocol does.
 
 ## 7. Tests
