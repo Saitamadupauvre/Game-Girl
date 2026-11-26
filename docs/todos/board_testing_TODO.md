@@ -96,10 +96,13 @@ On the Nucleo, use the user USB connector (check UM2861 for its number), not the
 
 ## 9. LEDs and fault display (once #43 and the LED wiring are done)
 
-- [ ] Green LED follows the charger, red LED follows low/critical battery, as in `docs/mcu/services/led.md`.
+- [ ] Each LED lights when its pin is set from GDB (`GPIOx_BSRR`): LD1 green PC7, LD3 red PG2, LD2 blue PB7. All three off after boot.
+- [ ] PG2 only works after `PWR_SVMCR.IO2SV` (VDDIO2 follows VDD_MCU through SB28, UM2861 §7.4.5 Table 9): the red LED stays dark if the bit is skipped in GDB.
+- [ ] Green LED follows the charger, red LED follows low/critical battery, as in `docs/mcu/services/led.md` (once the battery service fills `led_input_t`).
 - [ ] Critical blink: 250 ms period, 125 ms on.
-- [ ] Each forced fault (sections 2, 5, 7, 8) shows its blink code, and none clash with the low-battery patterns.
-- [ ] The last `fault_t` is readable with the debugger after a reset (backup register).
+- [ ] Each forced fault (sections 2, 5, 7, 8) shows its blink code on the blue LED: 2 clock, 3 USB start-up, 4 host lost, 5 USB disabled by the reset guard. 200 ms flashes, 1.5 s pause.
+- [ ] Blue off on a healthy boot, and back off once USB recovers (`fault_clear_failure()`).
+- [ ] The last `fault_t` is readable with the debugger after a reset: `x/wx 0x46007D04` (`TAMP_BKPR(1)`).
 
 ## 10. Game Girl PCB only
 

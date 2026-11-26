@@ -18,7 +18,7 @@ Register references are RM0456 Rev 7. Related lists: [`usb_TODO.md`](usb_TODO.md
 - [x] Every hardware wait in `usb.c` has a timeout (`wait_comp_setup()`, `USB_CORE_TIMEOUT_MS`).
 - [x] `init_hardware_clock()` returns `fault_t`. On failure the chip stays at 4 MHz, TIM2 still ticks at 1 ms (prescaler from `hardware_clock_hz()`), and `usb_task()` goes straight to `FAILED` without calling `init_usb()`.
 - [x] USB runtime recovery from the host side: a bus reset runs `usb_on_reset()`, which returns to address 0 with EP1 off.
-- [x] Superloop of non-blocking tasks. `main()` runs `init_system()` once (clock, GPIO, timer), then loops `input_task()` → `usb_task()`. Nothing in the loop blocks or retries inline.
+- [x] Superloop of non-blocking tasks. `main()` runs `init_system()` once (clock, backup, GPIO, timer, reset guard, watchdog), then loops `kick_watchdog()` → `reset_guard_task()` → `handle_tasks()` (`input_task()`, then `usb_task()` unless the reset guard disabled USB). Nothing in the loop blocks or retries inline.
 
 ## 1. Error reporting (shared by everything below)
 
@@ -41,7 +41,7 @@ Closes the `[?]` "how `init_usb()` reports failure" in `usb_TODO.md` §3.
 - [x] VBUS override for the Nucleo: `VBDEN = 0`, `GOTGCTL.BVALOEN | BVALOVAL`, wait `BSVLD` → `FAULT_USB_BSESSION` (`0x26`). Without it the core never connects the pull-up, because PA9 is the ST-LINK UART, not VBUS (UM2861 Tables 10, 13). Before this, that failure was silent: `init_usb()` returned `FAULT_NONE` and the host never saw the device.
 - [x] After the last attempt: `usb_task()` stays in `FAILED`, never calls `usb_hid_send_if_changed()`, and the main loop carries on.
 - [x] ~~Background retry after `FAILED`~~ **Won't do.** Nothing transient can cause `FAILED` on this hardware: VDDUSB is tied to 3V3 (the boot ramp is covered by the monitor wait and the backoff), and VBUS is overridden, so a missing cable never fails `init_usb()`. A retry would repeat a permanent failure and stall the main loop ~30 ms each time. Revisit only if the final PCB powers VDDUSB from VBUS.
-- [ ] Runtime last resort, if the host stops talking to an enumerated device: soft replug, `DCTL.SDIS = 1` for about 10 ms, then clear it, with a retry limit before `FAILED`. The host sees an unplug and enumerates again, without touching the rest of the firmware (#53).
+- [x] Runtime last resort, if the host stops talking to an enumerated device (#53): `usb_task()` watches host activity (bus reset, SETUP, EP1 report collected) while `usb_waiting_for_host()` says the bus is active and something is pending. After 2 s without progress (`USB_HOST_STALL_MS`) it logs `FAULT_USB_HOST_LOST` and soft replugs: `DCTL.SDIS = 1` for 100 ms (`USB_REPLUG_OFF_MS`), then clear it. After 3 replugs (`USB_REPLUG_LIMIT`) without a clean run, `hard_reset_usb()` and `FAILED`. A suspended bus never counts as a stall.
 
 ## 3. Clock init
 
@@ -50,12 +50,14 @@ Closes the `[?]` "how `init_usb()` reports failure" in `usb_TODO.md` §3.
 
 ## 4. Watchdog (IWDG, RM0456 chapter 61)
 
-- [ ] Add the IWDG registers to `stm32u575_regs.h` (base `0x40003000`, `IWDG_KR` at offset 0 and the prescaler/reload registers, see §61.7).
-- [ ] `init_watchdog()`: start it after all `init_*()` calls, or give it a timeout longer than the slowest init (25 ms device-mode wait + the timeouts + USB retries).
-- [ ] Timeout around 500 ms. It runs from LSI, which is independent of MSIS and HSI48, so a clock fault can't stop it.
-- [ ] Kick it in **one place only**: once per main-loop pass. Never inside an ISR or a wait loop, or a stuck loop could keep it happy.
-- [ ] Check that no main-loop pass can legitimately take longer than the timeout once retries and later drivers are added.
-- [ ] Once started, the IWDG can't be stopped. Check it doesn't fire during debugging: the DBGMCU freeze bit for IWDG, or start it only in release builds.
+Tracked in #41.
+
+- [x] Add the IWDG registers to `stm32u575_regs.h` (base `0x40003000`, `IWDG_KR`, `IWDG_PR`, `IWDG_RLR`, `IWDG_SR`, keys and status bits, see §61.7).
+- [x] `init_watchdog()` (`watchdog.c`) is the last call in `init_system()`, after every other `init_*()`. It follows the documented sequence (§61.4, window option disabled): start, unlock, `PR`/`RLR`, wait for `IWDG_SR` to clear with a 10 ms timeout (`FAULT_SYS_WATCHDOG_CONFIG` on timeout), refresh.
+- [x] Timeout 500 ms: LSI 32 kHz ÷ 32 (`PR = 3`) = 1 ms per tick, `RLR = 499`. LSI is independent of MSIS and HSI48, so a clock fault can't stop it.
+- [x] Kicked in **one place only**: `kick_watchdog()` at the top of the main loop. Never inside an ISR or a wait loop.
+- [ ] Check that no main-loop pass can legitimately take longer than the timeout once retries and later drivers are added. On the board: `board_testing_TODO.md` §8.
+- [x] Frozen while the core is halted by the debugger: `DBGMCU_APB1LFZR.DBG_IWDG_STOP`.
 
 ## 5. Reset cause and reset-loop guard
 
@@ -73,12 +75,20 @@ Tracked in #42. Degraded-mode table in `docs/mcu/power-and-usb-fallback.md`.
 
 ## 6. Making failures visible
 
-- [ ] Blink code on the red status LED (`docs/mcu/services/led.md`), e.g. 2 blinks = clock, 3 = USB init, 4 = repeated watchdog resets. Must not clash with the low-battery patterns.
-- [ ] Keep the last `fault_t` in `TAMP_BKPR(1)`, so it can be read with the debugger after a reset. Backup register map: `BKPR(0)` hang counters, `BKPR(1)` last fault, `BKPR(2)` breadcrumb.
-- [ ] Error counters (init retries, watchdog resets, soft replugs) for the status protocol to send to the Pi later (spec §7.2, `TODOs.md` "USB status protocol").
+Tracked in #43.
+
+- [x] LED registers in `stm32u575_regs.h`: GPIOB/C/G bases, `MODER`/`BSRR`, `GPIO_BSRR_SET`/`RESET`, `PWR_SVMCR.IO2SV`, LED pins (UM2861 §7.5: LD1 green PC7, LD2 blue PB7, LD3 red PG2, active high).
+- [x] `fault_log()` also writes `TAMP_BKPR(BKP_LAST_FAULT)`, so the last fault can be read with the debugger after a reset (`x/wx 0x46007D04`). Move `init_backup()` to the top of `init_system()` so a clock fault is saved too. Add a `backup_write()` fake to `test_fault.c` and `test_usb_task.c`.
+- [x] `fault_first_active()` in `fault.c`: the first non-`NONE` active fault, in subsystem order (a clock fault also stops USB, so it is the real cause).
+- [x] Fault codes on their own LED: `fault_led` (blue, LD2 on the Nucleo) in `led_output_t`, `active_fault` in `led_input_t`. Red and green keep the battery/charger policy, so no clash and no priority rules. Pattern: N flashes (200 ms on, 300 ms off), then a 1.5 s pause, stateless from `now_ms`. Codes: 2 = clock fallback (`0x10`–`0x12`), 3 = USB start-up (`0x20`–`0x27`), 4 = host lost (`0x28`), 5 = USB disabled by the reset guard (`0x29`). No active fault or an unknown code = off.
+- [x] Host tests in `test_led.c` (N flashes per period per code, off when healthy, red/green unchanged) and `test_fault.c` (`fault_first_active()`, last fault written to the backup slot).
+- [ ] `led.md`: third LED, blink table, timing.
+- [ ] PCB: add a third (fault) LED. Port G pins 2–15 need `IO2SV`, so prefer other ports for the LEDs.
+- [ ] LED GPIO driver (applies `led_output_t` to PC7/PB7/PG2, sets `IO2SV` before PG2). Separate from #43's pure logic.
+- [ ] ~~Error counters for the status protocol~~ Moved to #17: `fault_count[]`, the reset guard's hang counts and the replug count already exist; nothing reads them until the protocol does.
 
 ## 7. Tests
 
-- [ ] Host-test the retry and degrade logic with fake init steps that fail N times: the subsystem ends `OK` after a late success and `FAILED` after 3 failures, and the main-loop path keeps running.
+- [x] Host-test the retry and degrade logic with fake init steps that fail N times (`tests/test_usb_task.c`): the subsystem ends `RUNNING` after a late success and `FAILED` after 3 failures, and the main-loop path keeps running. Also covers the soft replug (stall, suspend, limit, counter reset).
 - [x] Host-test the reset guard (`tests/test_reset_guard.c`): the breadcrumb's counter increments on IWDG resets, other resets clear all counters, USB is disabled at 3, INPUT/POWER/NONE never disable anything, counters saturate, and the clean-run clear skips disabled subsystems and runs once.
 - [ ] On the board: force each failure (e.g. skip `PWR_SVMCR.USV`, or block in the main loop to trigger the IWDG) and check the blink code and the recovery.
