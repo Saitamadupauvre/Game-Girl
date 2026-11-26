@@ -5,6 +5,7 @@
 #include "usb.h"
 #include "hid.h"
 #include "fault.h"
+#include "backup.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -426,6 +427,10 @@ static void usb_on_in_ep(void)
 
 void OTG_FS_IRQHandler(void)
 {
+    // A hang in here is blamed on USB, not on the task it interrupted. Single exit: restored at the end.
+    const fault_subsystem_t interrupted = breadcrumb_fetch();
+    breadcrumb_set(FAULT_SUBSYS_USB);
+
     const uint32_t sts = OTG_GINTSTS & OTG_GINTMSK;
 
     if ((sts & OTG_GINTSTS_USBRST) != 0u) {
@@ -463,6 +468,8 @@ void OTG_FS_IRQHandler(void)
         bus_active = true;
         OTG_GINTSTS = OTG_GINTSTS_WKUINT;
     }
+
+    breadcrumb_set(interrupted);
 }
 
 

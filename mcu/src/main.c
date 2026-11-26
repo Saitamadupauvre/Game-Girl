@@ -7,12 +7,26 @@
 #include "usb.h"
 #include "watchdog.h"
 #include "backup.h"
+#include "reset_guard.h"
 
 
 /*
  * Non tasks are iniated here. Either they fail and use a fallback (hardware clock speed) or they work.
  * USB start up code is found in usb_task in /src/services/usb_task.c
  */
+
+static void handle_tasks(void)
+{
+    breadcrumb_set(FAULT_SUBSYS_INPUT);
+    input_task();
+
+    breadcrumb_set(FAULT_SUBSYS_USB);
+    if (reset_guard_enabled(FAULT_SUBSYS_USB)) {
+        usb_task();
+    }
+
+    breadcrumb_set(FAULT_SUBSYS_NONE);
+}
 
 static void init_system(void)
 {
@@ -26,6 +40,7 @@ static void init_system(void)
     init_backup();
     init_GPIO();
     init_timer();
+    init_reset_guard();
 
     init_fault = init_watchdog();
     if (init_fault != FAULT_NONE) {
@@ -39,8 +54,8 @@ int main(void)
 
     for (;;) {
         kick_watchdog();
-        input_task();
-        usb_task();
+        reset_guard_task();
+        handle_tasks();
     }
 
     return 0;
