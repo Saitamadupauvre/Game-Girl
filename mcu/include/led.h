@@ -2,11 +2,13 @@
  * @file led.h
  * @brief Hardware-independent LED status policy for the Game GIRL MCU.
  *
- * The console has two status LEDs, one green and one red:
+ * The console has three status LEDs:
  *  - **Charging LED (green)**: solid on while the charger is connected.
  *  - **Battery LED (red)**: off when the battery is OK, solid on when low,
  *    blinking when critical. Always off while charging: the green LED
  *    already tells the user the battery is being taken care of.
+ *  - **Fault LED (blue)**: blink code of the active fault, off when healthy.
+ *    It has its own LED so it never clashes with the battery patterns.
  *
  * This service only *decides* what the LEDs should show. It never touches
  * GPIO, PWM, or any register: a driver applies the result later. Time is
@@ -17,6 +19,7 @@
 #ifndef LED_H
     #define LED_H
 
+    #include "fault.h"
     #include <stdbool.h>
     #include <stdint.h>
 
@@ -40,6 +43,22 @@ _Static_assert(LED_CRITICAL_BLINK_ON_MS > 0u &&
                "LED_CRITICAL_BLINK_ON_MS must be in (0, LED_CRITICAL_BLINK_PERIOD_MS)");
 
 /**
+ * @brief Fault blink code: N flashes, then a pause, repeated.
+ *
+ * Each flash takes one slot of LED_FAULT_SLOT_MS, lit for the first
+ * LED_FAULT_ON_MS of it. N = 2 clock fallback, 3 USB start-up, 4 host lost,
+ * 5 USB disabled by the reset guard (table in docs/mcu/services/led.md).
+ */
+    #define LED_FAULT_SLOT_MS   500u
+    #define LED_FAULT_ON_MS     200u
+    #define LED_FAULT_PAUSE_MS  1500u
+
+_Static_assert(LED_FAULT_ON_MS > 0u && LED_FAULT_ON_MS < LED_FAULT_SLOT_MS,
+               "LED_FAULT_ON_MS must be in (0, LED_FAULT_SLOT_MS)");
+_Static_assert(LED_FAULT_PAUSE_MS > LED_FAULT_SLOT_MS,
+               "The pause must be longer than a flash slot, or codes run together");
+
+/**
  * @brief Battery charge level, as classified by the battery service.
  */
 typedef enum {
@@ -54,6 +73,7 @@ typedef enum {
 typedef struct {
     bool charger_connected;        /**< True while external power is plugged in. */
     battery_level_t battery_level; /**< Current battery classification. */
+    fault_t active_fault;          /**< From fault_first_active(). FAULT_NONE = healthy. */
 } led_input_t;
 
 /**
@@ -62,6 +82,7 @@ typedef struct {
 typedef struct {
     bool charging_led; /**< Green LED: charging indicator. */
     bool battery_led;  /**< Red LED: low / critical battery indicator. */
+    bool fault_led;    /**< Blue LED: fault blink code. */
 } led_output_t;
 
 /**
@@ -71,8 +92,15 @@ typedef struct {
  * @param now_ms  Current time in milliseconds. When it wraps (~49 days),
  *                one blink phase may be shorter; this is harmless.
  *
- * @return Desired on/off state of both LEDs.
+ * @return Desired on/off state of every LED.
  */
 led_output_t update_led_outputs(const led_input_t *input, uint32_t now_ms);
+
+/**
+ * @brief Main-loop task: gathers the inputs, decides, and drives the pins.
+ *
+ * Defined in led_task.c, not led.c, so the policy above stays host-testable.
+ */
+void led_task(void);
 
 #endif

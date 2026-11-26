@@ -1,3 +1,26 @@
+/**
+  ******************************************************************************
+  * @file    watchdog.c
+  * @brief   Independent watchdog (IWDG): resets the chip when the main loop stops.
+  *
+  *          This file provides functions to:
+  *           + Start the IWDG with a 500 ms timeout
+  *           + Refresh it
+  ******************************************************************************
+  *
+  * LSI 32 kHz / 32 = 1 ms per tick, RLR = 499: 500 ms timeout. LSI is independent of MSIS and
+  * HSI48, so a clock fault can't stop it. Once started, only a reset stops it.
+  *
+  * init_watchdog() follows RM0456 61.4 (window option disabled) and is the last call in
+  * init_system(). If IWDG_SR doesn't clear within 10 ms it returns FAULT_SYS_WATCHDOG_CONFIG: the
+  * watchdog still runs, on whichever values were applied. It is frozen while the debugger halts
+  * the core (DBGMCU).
+  *
+  * kick_watchdog() is called once per pass, at the top of the main loop only. Never in an ISR or
+  * a wait loop, or a stuck loop could keep it happy. After a watchdog reset, reset_guard.c finds
+  * out which task hung.
+  ******************************************************************************
+  */
 
 #include "stm32u575_regs.h"
 #include "watchdog.h"

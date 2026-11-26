@@ -70,6 +70,7 @@ void fault_clear_failure(fault_subsystem_t subsys);
 void fault_set_failure(fault_t f);
 
 fault_t fault_read_active(fault_subsystem_t subsys);
+fault_t fault_first_active(void);   // Lowest subsystem first: a clock fault also stops USB, so it is the cause
 
 #ifdef GAME_GIRL_HOST_TEST
 // Host tests only: clear the history and the active faults, as at power-on.

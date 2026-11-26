@@ -1,3 +1,30 @@
+/**
+  ******************************************************************************
+  * @file    usb_task.c
+  * @brief   USB policy: start-up retries, report sending and soft replug.
+  *
+  *          This file provides functions to:
+  *           + Start USB with retries, then give up without stopping the main loop
+  *           + Send the button report while USB runs
+  *           + Detect a stalled host and soft replug
+  ******************************************************************************
+  *
+  * State machine: STARTING -> RUNNING, or BACKOFF -> STARTING again, or FAILED. usb.c does the
+  * register work; this file decides when.
+  *
+  * Start-up: USB needs 24 MHz, so after a clock fault it goes straight to FAILED. Otherwise up to
+  * USB_START_ATTEMPTS tries of init_usb(), with hard_reset_usb() and USB_RETRY_BACKOFF_MS after
+  * each failure. Every failure is logged; the last one is also set active.
+  *
+  * Soft replug: while the bus is active and something is pending (enumeration or a report), the
+  * host must make progress within USB_HOST_STALL_MS. If not, FAULT_USB_HOST_LOST is logged and the
+  * pull-up is turned off for USB_REPLUG_OFF_MS so the host enumerates again. After
+  * USB_REPLUG_LIMIT replugs without a clean run, USB is reset and left FAILED. A suspended bus
+  * never counts as a stall.
+  *
+  * Tests with usb.c faked: tests/test_usb_task.c.
+  ******************************************************************************
+  */
 
 #include "usb.h"
 #include "fault.h"

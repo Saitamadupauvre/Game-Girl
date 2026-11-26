@@ -1,5 +1,32 @@
+/**
+  ******************************************************************************
+  * @file    fault.c
+  * @brief   Fault history and active faults: the one place every fault_t goes.
+  *
+  *          This file provides functions to:
+  *           + Log a fault (history)
+  *           + Set and clear a subsystem's active fault
+  *           + Read the active faults
+  ******************************************************************************
+  *
+  * Codes are in fault.h (0xSN: subsystem nibble, step nibble). Each module handles its own
+  * recovery and only reports here; reporters (the fault LED, later the status protocol to the Pi)
+  * read only this file, never a module's own state.
+  *
+  * History: fault_log() keeps the last fault and a saturating count per subsystem, and saves the
+  * last fault to TAMP_BKPR(BKP_LAST_FAULT) so it survives a reset. It is called on every failed
+  * attempt, including ones that are retried and succeed later.
+  *
+  * Active state: fault_set_failure() when a module degrades, fault_clear_failure() when it
+  * recovers. fault_first_active() returns the lowest subsystem first: a clock fault also stops
+  * USB, so it is the real cause.
+  *
+  * Tests: tests/test_fault.c.
+  ******************************************************************************
+  */
 
 #include "fault.h"
+#include "backup.h"
 
 #include <stdint.h>
 
@@ -26,6 +53,17 @@ fault_t fault_read_active(fault_subsystem_t subsys)
     }
     
     return active_fault[subsys];
+}
+
+fault_t fault_first_active(void)
+{
+    for (uint8_t subsys = 0; subsys < FAULT_SUBSYS_COUNT; subsys++) {
+        if (active_fault[subsys] != FAULT_NONE) {
+            return active_fault[subsys];
+        }
+    }
+
+    return FAULT_NONE;
 }
 
 void fault_clear_failure(fault_subsystem_t subsys)
@@ -58,4 +96,6 @@ void fault_log(fault_t f)
     if (fault_count[system] < UINT8_MAX) {
         fault_count[system]++;
     }
+
+    backup_write(BKP_LAST_FAULT, (uint32_t)f);
 }

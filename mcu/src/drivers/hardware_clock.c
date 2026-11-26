@@ -1,3 +1,26 @@
+/**
+  ******************************************************************************
+  * @file    hardware_clock.c
+  * @brief   System clock: 24 MHz from MSIS, with a 4 MHz fallback.
+  *
+  *          This file provides functions to:
+  *           + Raise the core voltage and switch MSIS to 24 MHz
+  *           + Report the frequency actually running
+  ******************************************************************************
+  *
+  * After reset the STM32U575 runs from MSIS at 4 MHz in voltage range 4. init_hardware_clock()
+  * raises the core voltage to range 3 (USB does not work in range 4), then switches MSIS to
+  * 24 MHz. MSIS is already the system clock, so HCLK, the APB buses and TIM2 all speed up at once.
+  * 24 MHz in range 3 needs no flash or SRAM wait states.
+  *
+  * On failure it returns the fault_t of the step that timed out and the chip stays at 4 MHz until
+  * the next reset (no retry: a VOS or MSIS timeout is a hardware fault). main.c marks it active.
+  * hardware_clock_hz() returns the frequency actually running: timer.c sets its prescaler from it,
+  * and usb_task.c refuses to start USB below 24 MHz.
+  *
+  * Runs before init_timer(), so the ready waits count loop passes, not milliseconds.
+  ******************************************************************************
+  */
 
 #include "hardware_clock.h"
 #include "stm32u575_regs.h"

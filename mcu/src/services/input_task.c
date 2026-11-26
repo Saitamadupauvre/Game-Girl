@@ -1,3 +1,18 @@
+/**
+  ******************************************************************************
+  * @file    input_task.c
+  * @brief   Main-loop task that samples the buttons every 1 ms.
+  *
+  *          This file provides functions to:
+  *           + Sample and debounce the buttons on a 1 ms deadline
+  *           + Give other tasks the current button state
+  ******************************************************************************
+  *
+  * input_task() never blocks: it returns at once until INPUT_UPDATE_PERIOD_MS has passed, then
+  * reads the pins (gpio.c) and debounces them (inputs.c). usb_task.c reads the result through
+  * inputs_get().
+  ******************************************************************************
+  */
 
 #include "inputs.h"
 #include "gpio.h"

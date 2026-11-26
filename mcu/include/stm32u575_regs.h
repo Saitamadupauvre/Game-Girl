@@ -321,6 +321,7 @@
 #define PWR_BASE_NS     0x46020800UL
 #define PWR_SVMCR_OFFSET    0x00000010UL
 #define PWR_SVMCR       MMIO32(PWR_BASE_NS + PWR_SVMCR_OFFSET)
+#define PWR_SVMCR_IO2SV (1UL << 29)     // VDDIO2 valid: removes PG[15:2] isolation. Mandatory to use PG2 (red LED)
 #define PWR_SVMCR_USV   (1UL << 28)     // VDDUSB valid: removes USB isolation
 #define PWR_SVMCR_UVMEN (1UL << 24)     // VDDUSB voltage monitor enable. RM0456 10.10.5
 
@@ -358,6 +359,25 @@
 #define GPIOA_AFRH      MMIO32(GPIOA_BASE_NS + GPIO_AFRH_OFFSET)
 
 #define GPIO_AF10_USB   0xAUL
+
+// GPIOB User LEDs (UM2861 7.5): LD1 green PC7, LD2 blue PB7, LD3 red PG2. Active high, driven through a transistor.
+
+#define GPIO_BSRR_OFFSET    0x00000018UL    // Write-only: bit n sets pin n, bit n+16 resets it, in one write
+
+#define GPIOB_BASE_NS   0x42020400UL
+#define GPIOC_BASE_NS   0x42020800UL
+#define GPIOG_BASE_NS   0x42021800UL    // PG[15:2] need PWR_SVMCR.IO2SV
+
+#define GPIOB_MODER     MMIO32(GPIOB_BASE_NS + GPIO_MODER_OFFSET)
+#define GPIOB_BSRR      MMIO32(GPIOB_BASE_NS + GPIO_BSRR_OFFSET)
+#define GPIOC_MODER     MMIO32(GPIOC_BASE_NS + GPIO_MODER_OFFSET)
+#define GPIOC_BSRR      MMIO32(GPIOC_BASE_NS + GPIO_BSRR_OFFSET)
+#define GPIOG_MODER     MMIO32(GPIOG_BASE_NS + GPIO_MODER_OFFSET)
+#define GPIOG_BSRR      MMIO32(GPIOG_BASE_NS + GPIO_BSRR_OFFSET)
+
+#define LED_GREEN_PIN   7u      // PC7, LD1
+#define LED_BLUE_PIN    7u      // PB7, LD2
+#define LED_RED_PIN     2u      // PG2, LD3
 
 // NVIC
 
@@ -445,6 +465,10 @@
 
 /* IDR uses one bit per pin. */
 #define GPIO_IDR_PIN_BIT(pin)           (1UL << (uint32_t)(pin))
+
+/* BSRR: set in bits 15:0, reset in bits 31:16. */
+#define GPIO_BSRR_SET(pin)              (1UL << (uint32_t)(pin))
+#define GPIO_BSRR_RESET(pin)            (1UL << ((uint32_t)(pin) + 16UL))
 
 
 #endif

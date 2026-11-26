@@ -1,3 +1,36 @@
+/**
+  ******************************************************************************
+  * @file    usb.c
+  * @brief   USB OTG_FS device driver for the full-speed HID gamepad.
+  *
+  *          This file provides functions to:
+  *           + Start the OTG_FS core in device mode, and hard-reset it
+  *           + Handle the USB interrupt (EP0 control, EP1 report)
+  *           + Send the button report from the main loop
+  *           + Support the soft replug in usb_task.c
+  ******************************************************************************
+  *
+  * What to answer is decided in hid.c; when to start, retry or replug is decided in usb_task.c.
+  *
+  * Start-up, init_usb(): VDDUSB check and USV, HSI48 as the USB clock, PA11/PA12 on AF10, core
+  * soft reset, forced device mode, FIFO sizes, VBUS override (on the Nucleo PA9 is the ST-LINK
+  * UART, not VBUS), then the D+ pull-up. Every wait has a timeout and returns the fault_t of the
+  * step that failed. hard_reset_usb() pulses OTGRST and resets the driver RAM after a failed try.
+  *
+  * Interrupts, OTG_FS_IRQHandler(): bus reset, enumeration done, SETUP and OUT data from the RX
+  * FIFO, EP0 replies, EP1 transfer complete, suspend and resume. It writes the USB breadcrumb
+  * while it runs, so a hang inside it is blamed on USB (reset_guard.c).
+  *
+  * Main loop, usb_hid_send_if_changed(): arms a report on EP1 when the buttons change or the idle
+  * rate asks for a resend.
+  *
+  * Soft replug: usb_waiting_for_host(), usb_host_activity(), usb_soft_disconnect() and
+  * usb_soft_connect().
+  *
+  * Needs HCLK at 24 MHz (GUSBCFG.TRDT). Register access only, no host tests.
+  * Board checks: docs/todos/board_testing_TODO.md §5-7. Design notes: docs/mcu/drivers/usb.md.
+  ******************************************************************************
+  */
 
 #include "stm32u575_regs.h"
 #include "timer_api.h"

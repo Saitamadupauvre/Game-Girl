@@ -1,27 +1,35 @@
-/*
- * reset_guard.c - Reset-loop guard
- *
- * A watchdog reset only helps if the hang was transient. If the same task hangs on every boot,
- * the console would reboot forever. This module stops that loop by disabling the subsystem
- * responsible, when the console can run without it.
- *
- * Before each task the main loop writes a breadcrumb (the task's fault_subsystem_t) to
- * TAMP_BKPR(BKP_BREADCRUMB). After a watchdog reset, init_reset_guard() reads it and increments
- * that subsystem's hang count in TAMP_BKPR(BKP_HANG_COUNTS). Both registers survive a system reset.
- *
- * Hang counts: one 4-bit counter per fault_subsystem_t, packed in one uint32_t
- * (subsystem n in bits 4n..4n+3).
- *
- * Rules:
- *   - Any reset other than the watchdog clears every count.
- *   - A disableable subsystem (USB, later I2C) is turned off once its count reaches GUARD_LIMIT.
- *     INPUT and POWER are never disabled.
- *   - After GUARD_CLEAN_RUN_MS without a hang, the counts of the enabled subsystems are cleared.
- *     A disabled subsystem stays off until the next non-watchdog reset.
- *
- * The decision functions are pure and tested on the host (tests/test_reset_guard.c).
- * Degraded modes: docs/mcu/power-and-usb-fallback.md.
- */
+/**
+  ******************************************************************************
+  * @file    reset_guard.c
+  * @brief   Reset-loop guard: disables the subsystem behind repeated watchdog resets.
+  *
+  *          This file provides functions to:
+  *           + Decide the hang counts after a reset (pure, tested on the host)
+  *           + Tell whether a subsystem has been disabled
+  *           + Clear the counts after a clean run
+  ******************************************************************************
+  *
+  * A watchdog reset only helps if the hang was transient. If the same task hangs on every boot,
+  * the console would reboot forever. This module stops that loop by disabling the subsystem
+  * responsible, when the console can run without it.
+  *
+  * Before each task the main loop writes a breadcrumb (the task's fault_subsystem_t) to
+  * TAMP_BKPR(BKP_BREADCRUMB). After a watchdog reset, init_reset_guard() reads it and increments
+  * that subsystem's hang count in TAMP_BKPR(BKP_HANG_COUNTS). Both registers survive a system reset.
+  *
+  * Hang counts: one 4-bit counter per fault_subsystem_t, packed in one uint32_t
+  * (subsystem n in bits 4n..4n+3).
+  *
+  * Rules:
+  *   - Any reset other than the watchdog clears every count.
+  *   - A disableable subsystem (USB, later I2C) is turned off once its count reaches GUARD_LIMIT.
+  *     INPUT and POWER are never disabled.
+  *   - After GUARD_CLEAN_RUN_MS without a hang, the counts of the enabled subsystems are cleared.
+  *     A disabled subsystem stays off until the next non-watchdog reset.
+  *
+  * Tests: tests/test_reset_guard.c. Degraded modes: docs/mcu/power-and-usb-fallback.md.
+  ******************************************************************************
+  */
 
 #include "stm32u575_regs.h"
 #include "reset_guard.h"

@@ -1,3 +1,21 @@
+/**
+  ******************************************************************************
+  * @file    timer.c
+  * @brief   1 ms timebase on TIM2.
+  *
+  *          This file provides functions to:
+  *           + Start TIM2 as a free-running 1 kHz counter
+  *           + Read the time in milliseconds
+  ******************************************************************************
+  *
+  * TIM2 free-runs as a 32-bit up-counter at 1 kHz, so time_now_ms() is just TIM2_CNT. The
+  * prescaler comes from hardware_clock_hz(), so the tick stays 1 ms at 24 MHz and at the 4 MHz
+  * fallback. Must run after init_hardware_clock().
+  *
+  * No interrupts: tasks poll deadlines through timer_api.c. The counter wraps after ~49 days,
+  * which timer_expired() handles with a signed difference.
+  ******************************************************************************
+  */
 
 #include "hardware_clock.h"
 #include "timer.h"

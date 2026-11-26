@@ -3,6 +3,7 @@
 #include "gpio.h"
 #include "hardware_clock.h"
 #include "inputs.h"
+#include "led.h"
 #include "timer.h"
 #include "usb.h"
 #include "watchdog.h"
@@ -26,10 +27,13 @@ static void handle_tasks(void)
     }
 
     breadcrumb_set(FAULT_SUBSYS_NONE);
+    led_task();     // Never disabled: a hang here counts under SYS
 }
 
 static void init_system(void)
 {
+    init_backup();      // First: fault_log() saves the last fault to a backup register, even a clock fault
+
     // init_timer() reads the clock speed it sets. On failure the chip stays at 4 MHz, on succes it goes up to 24Mhz
     fault_t init_fault = init_hardware_clock();
     if (init_fault != FAULT_NONE) {
@@ -37,7 +41,6 @@ static void init_system(void)
         fault_set_failure(init_fault);     // 4 MHz fallback lasts until the next reset
     }
 
-    init_backup();
     init_GPIO();
     init_timer();
     init_reset_guard();

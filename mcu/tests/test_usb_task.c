@@ -4,6 +4,7 @@
  */
 
 #include "usb.h"
+#include "backup.h"
 #include "fault.h"
 #include "hardware_clock.h"
 #include "inputs.h"
@@ -55,6 +56,12 @@ static uint32_t host_activity;          // usb_host_activity()
 static bool pullup_on;
 static uint32_t disconnect_calls;
 static uint32_t connect_calls;
+
+void backup_write(const uint32_t idx, const uint32_t value)
+{
+    (void)idx;      // fault_log() saves the last fault; not checked here
+    (void)value;
+}
 
 uint32_t time_now_ms(void)
 {

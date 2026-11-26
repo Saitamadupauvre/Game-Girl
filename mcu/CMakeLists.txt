@@ -14,6 +14,7 @@ add_library(gamegirl-firmware-objects OBJECT
     src/services/usb_task.c
     src/services/hid.c
     src/services/led.c
+    src/services/led_task.c
     src/services/fault.c
     src/services/reset_guard.c
 )

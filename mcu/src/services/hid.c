@@ -1,3 +1,26 @@
+/**
+  ******************************************************************************
+  * @file    hid.c
+  * @brief   USB HID gamepad: descriptors, control requests and report packing.
+  *
+  *          This file provides functions to:
+  *           + Answer SETUP packets (standard and HID class requests)
+  *           + Pack the buttons into the 2-byte report
+  *           + Reset the HID state on a bus reset
+  ******************************************************************************
+  *
+  * No registers: usb.c calls it from the ISR and the main loop, and it is tested on the host
+  * (tests/test_hid.c).
+  *
+  * Device: VID:PID 0x1209:0x0001 (pid.codes test pair), one HID interface, EP1 interrupt IN
+  * polled every 1 ms. Report: byte 0 = 8 buttons in Linux gamepad order (B, A, X, Y, L, R,
+  * Select, Start), byte 1 low nibble = D-pad hat switch (0 = up, clockwise, 8 = released).
+  *
+  * hid_handle_setup() returns a usb_reply_t (data, zero-length packet or stall) for usb.c to send,
+  * and updates hid_state_t (address, configuration, idle rate). Data replies point at static
+  * storage or at *state, so they stay valid after it returns.
+  ******************************************************************************
+  */
 
 #include "hid.h"
 #include "inputs.h"

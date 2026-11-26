@@ -1,4 +1,5 @@
 #include "led.h"
+#include "fault.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -163,6 +164,7 @@ static int test_input_is_not_modified(void)
     const led_input_t input = {
         .charger_connected = true,
         .battery_level = BATTERY_LEVEL_CRITICAL,
+        .active_fault = FAULT_USB_HANG,
     };
     led_input_t copy = input;
 
@@ -170,6 +172,149 @@ static int test_input_is_not_modified(void)
 
     CHECK_BOOL(copy.charger_connected, input.charger_connected);
     CHECK_BOOL(copy.battery_level == input.battery_level, true);
+    CHECK_BOOL(copy.active_fault == input.active_fault, true);
+
+    return 0;
+}
+
+
+/* Fault LED (blue) */
+
+static bool fault_led_at(fault_t sys_fault, uint32_t now_ms)
+{
+    const led_input_t input = {
+        .charger_connected = false,
+        .battery_level = BATTERY_LEVEL_OK,
+        .active_fault = sys_fault,
+    };
+
+    return update_led_outputs(&input, now_ms).fault_led;
+}
+
+// Expected blink codes, written out here rather than read from led.c
+static const struct {
+    fault_t sys_fault;
+    uint32_t flashes;
+} blink_codes[] = {
+    { FAULT_CLOCK_VOS,            2u },
+    { FAULT_CLOCK_MSIS_NOT_READY, 2u },
+    { FAULT_CLOCK_MSIS_RANGE,     2u },
+    { FAULT_USB_HSI48,            3u },
+    { FAULT_USB_CORE_RESET,       3u },
+    { FAULT_USB_VDDUSB,           3u },
+    { FAULT_USB_HOST_LOST,        4u },
+    { FAULT_USB_HANG,             5u },
+};
+
+#define BLINK_CODE_COUNT (sizeof(blink_codes) / sizeof(blink_codes[0]))
+
+static uint32_t fault_period(uint32_t flashes)
+{
+    return (flashes * LED_FAULT_SLOT_MS) + LED_FAULT_PAUSE_MS;
+}
+
+static int test_fault_led_off_when_healthy(void)
+{
+    for (size_t i = 0; i < SAMPLE_COUNT; ++i) {
+        CHECK_BOOL(fault_led_at(FAULT_NONE, sample_times[i]), false);
+    }
+
+    return 0;
+}
+
+static int test_fault_led_off_for_unknown_codes(void)
+{
+    const fault_t unknown[] = {
+        FAULT_SYS_WATCHDOG_CONFIG, FAULT_SYS_WATCHDOG_LOOP, (fault_t)0xF0,
+    };
+
+    for (size_t c = 0; c < 3u; ++c) {
+        for (uint32_t t = 0; t < 5000u; ++t) {
+            CHECK_BOOL(fault_led_at(unknown[c], t), false);
+        }
+    }
+
+    return 0;
+}
+
+static int test_fault_led_flash_count_per_code(void)
+{
+    for (size_t c = 0; c < BLINK_CODE_COUNT; ++c) {
+        const uint32_t period = fault_period(blink_codes[c].flashes);
+        uint32_t flashes = 0u;
+        uint32_t lit_ms = 0u;
+        bool was_on = false;
+
+        for (uint32_t t = 0; t < period; ++t) {
+            const bool on = fault_led_at(blink_codes[c].sys_fault, t);
+            if (on && !was_on) {
+                ++flashes;
+            }
+            if (on) {
+                ++lit_ms;
+            }
+            was_on = on;
+        }
+
+        if ((flashes != blink_codes[c].flashes) ||
+            (lit_ms != blink_codes[c].flashes * LED_FAULT_ON_MS)) {
+            (void)fprintf(stderr, "%s:%d: fault 0x%02X: %u flashes, %u ms lit, expected %u flashes\n",
+                __FILE__, __LINE__, (unsigned)blink_codes[c].sys_fault,
+                (unsigned)flashes, (unsigned)lit_ms, (unsigned)blink_codes[c].flashes);
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int test_fault_led_pause_then_repeat(void)
+{
+    for (size_t c = 0; c < BLINK_CODE_COUNT; ++c) {
+        const fault_t sys_fault = blink_codes[c].sys_fault;
+        const uint32_t flashing_ms = blink_codes[c].flashes * LED_FAULT_SLOT_MS;
+        const uint32_t period = fault_period(blink_codes[c].flashes);
+
+        // Last flash ends, then the whole pause is dark
+        CHECK_BOOL(fault_led_at(sys_fault, flashing_ms - LED_FAULT_SLOT_MS), true);
+        for (uint32_t t = flashing_ms; t < period; ++t) {
+            CHECK_BOOL(fault_led_at(sys_fault, t), false);
+        }
+
+        // Next code starts lit, and far later the pattern is the same
+        CHECK_BOOL(fault_led_at(sys_fault, period), true);
+        CHECK_BOOL(fault_led_at(sys_fault, period * 1000u), true);
+        CHECK_BOOL(fault_led_at(sys_fault, (period * 1000u) + LED_FAULT_ON_MS), false);
+    }
+
+    return 0;
+}
+
+static int test_fault_does_not_change_red_or_green(void)
+{
+    const battery_level_t levels[] = {
+        BATTERY_LEVEL_OK, BATTERY_LEVEL_LOW, BATTERY_LEVEL_CRITICAL,
+    };
+
+    for (size_t l = 0; l < 3u; ++l) {
+        for (uint32_t charger = 0; charger < 2u; ++charger) {
+            for (uint32_t t = 0; t < 3000u; ++t) {
+                const led_input_t healthy = {
+                    .charger_connected = (charger != 0u),
+                    .battery_level = levels[l],
+                    .active_fault = FAULT_NONE,
+                };
+                led_input_t faulty = healthy;
+                faulty.active_fault = FAULT_USB_HANG;
+
+                const led_output_t want = update_led_outputs(&healthy, t);
+                const led_output_t got = update_led_outputs(&faulty, t);
+
+                CHECK_BOOL(got.charging_led, want.charging_led);
+                CHECK_BOOL(got.battery_led, want.battery_led);
+            }
+        }
+    }
 
     return 0;
 }
@@ -184,6 +329,11 @@ int main(void)
     RUN_TEST(test_red_led_off_while_charging);
     RUN_TEST(test_critical_blink_duty_cycle);
     RUN_TEST(test_input_is_not_modified);
+    RUN_TEST(test_fault_led_off_when_healthy);
+    RUN_TEST(test_fault_led_off_for_unknown_codes);
+    RUN_TEST(test_fault_led_flash_count_per_code);
+    RUN_TEST(test_fault_led_pause_then_repeat);
+    RUN_TEST(test_fault_does_not_change_red_or_green);
 
     return 0;
 }
