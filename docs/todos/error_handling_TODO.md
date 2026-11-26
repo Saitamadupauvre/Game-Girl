@@ -63,13 +63,13 @@ Tracked in #42. Degraded-mode table in `docs/mcu/power-and-usb-fallback.md`.
 
 - [x] Registers in `stm32u575_regs.h`: `RCC_CSR` reset flags + `RMVF`, `RCC_APB3ENR.RTCAPBEN`, `PWR_DBPR.DBP`, `TAMP_BKPR(x)`.
 - [x] Backup driver `backup.c`: `init_backup()` (`PWREN`, `DBP`, `RTCAPBEN`), `reset_flags_read_clear()` (returns `RCC_CSR`, then `RMVF`), bounds-checked `backup_read()`/`backup_write()`, `breadcrumb_set()`/`breadcrumb_fetch()`. Slot map in `backup.h`: `BKP_HANG_COUNTS` 0, `BKP_LAST_FAULT` 1, `BKP_BREADCRUMB` 2.
-- [ ] Append `FAULT_SUBSYS_INPUT` (0x4), `FAULT_SUBSYS_I2C` (0x5), `FAULT_SUBSYS_POWER` (0x6) to `fault_subsystem_t`, and add `FAULT_USB_HANG` (0x29).
-- [ ] Breadcrumb in `TAMP_BKPR(2)`: the main loop writes the subsystem before each task and `FAULT_SUBSYS_NONE` at the end. The USB ISR saves it, writes `USB`, and restores it on exit.
-- [ ] Hang counters in `TAMP_BKPR(0)`: one 4-bit counter per subsystem. Backup registers survive a system reset and clear on power-off, so no `.noinit` section is needed.
-- [ ] Pure `reset_guard_decide(csr_flags, breadcrumb, counts)`: an IWDG reset increments the breadcrumb's counter, any other reset clears all counters. A subsystem is disabled at count >= 3 if it is disableable (USB, later I2C). INPUT and POWER never are.
-- [ ] `reset_guard_init()` at boot, after `init_timer()` and before `init_watchdog()`: `init_backup()`, `reset_flags_read_clear()`, read the counts and the breadcrumb, decide, write the counts back, set the breadcrumb to `NONE`.
-- [ ] Gate `usb_task()` on the decision; a disabled USB keeps the core in reset and sets `FAULT_USB_HANG` active.
-- [ ] After 10 s of clean running, clear the counters of the subsystems still enabled. A disabled one stays off until the next non-watchdog reset.
+- [x] Append `FAULT_SUBSYS_INPUT` (0x4), `FAULT_SUBSYS_I2C` (0x5), `FAULT_SUBSYS_POWER` (0x6) to `fault_subsystem_t`, and add `FAULT_USB_HANG` (0x29).
+- [x] Breadcrumb in `TAMP_BKPR(2)`: the main loop writes the subsystem before each task and `FAULT_SUBSYS_NONE` at the end. The USB ISR saves it, writes `USB`, and restores it on exit.
+- [x] Hang counters in `TAMP_BKPR(0)`: one 4-bit counter per subsystem. Backup registers survive a system reset and clear on power-off, so no `.noinit` section is needed.
+- [x] Pure `reset_guard_decide(csr_flags, breadcrumb, counts)` in `reset_guard.c`: an IWDG reset increments the breadcrumb's counter, any other reset clears all counters. A subsystem is disabled at count >= 3 if it is disableable (USB, later I2C). INPUT and POWER never are.
+- [x] `init_reset_guard()` at boot, after `init_backup()` and `init_timer()`, before `init_watchdog()`: `reset_flags_read_clear()`, read the counts and the breadcrumb, decide, write the counts back, set the breadcrumb to `NONE`.
+- [x] Gate `usb_task()` on `reset_guard_enabled()`. A disabled USB is never initialised, so the core stays in its post-reset state, and `FAULT_USB_HANG` is active.
+- [x] After 10 s of clean running (`reset_guard_task()`), clear the counters of the subsystems still enabled. A disabled one stays off until the next non-watchdog reset.
 
 ## 6. Making failures visible
 
@@ -80,5 +80,5 @@ Tracked in #42. Degraded-mode table in `docs/mcu/power-and-usb-fallback.md`.
 ## 7. Tests
 
 - [ ] Host-test the retry and degrade logic with fake init steps that fail N times: the subsystem ends `OK` after a late success and `FAILED` after 3 failures, and the main-loop path keeps running.
-- [ ] Host-test `reset_guard_decide()`: the breadcrumb's counter increments on IWDG resets, other resets clear all counters, USB is disabled at 3, INPUT/POWER/NONE never disable anything, and the clean-run clear skips disabled subsystems.
+- [x] Host-test the reset guard (`tests/test_reset_guard.c`): the breadcrumb's counter increments on IWDG resets, other resets clear all counters, USB is disabled at 3, INPUT/POWER/NONE never disable anything, counters saturate, and the clean-run clear skips disabled subsystems and runs once.
 - [ ] On the board: force each failure (e.g. skip `PWR_SVMCR.USV`, or block in the main loop to trigger the IWDG) and check the blink code and the recovery.

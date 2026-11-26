@@ -78,9 +78,21 @@ On the Nucleo, use the user USB connector (check UM2861 for its number), not the
 - [ ] IWDG runs with a ~500 ms timeout: block the main loop on purpose (GDB, or a test build with a `for (;;)`) and the chip resets.
 - [ ] Paused at a breakpoint for longer than the timeout: no reset (DBGMCU freeze bit, or the release-only start).
 - [ ] The slowest main-loop pass (a USB start-up attempt, about 30 ms) stays far under the timeout.
-- [ ] After a watchdog reset, `RCC_CSR.IWDGRSTF` is read and then cleared with `RMVF`.
-- [ ] 3 watchdog resets in a row → degraded mode (USB off), no more reboots. A clean run of ~10 s clears the counter.
-- [ ] The counter survives a reset but not a power-off.
+- [ ] After a watchdog reset, `RCC_CSR.IWDGRSTF` is read and then cleared with `RMVF`: the next pin reset no longer shows it.
+
+### Reset-loop guard (`backup.c`, `reset_guard.c`)
+
+**Forcing a hang:** in GDB, break on the task, then `jump` to a `b .` loop, or set `$pc` to the current instruction and `continue`. The IWDG fires 500 ms later with the breadcrumb still naming that task.
+
+- [ ] `TAMP_BKPR` writes stick: write a value in GDB, press reset, read it back. If not, check `PWR_DBPR.DBP`, `RTCAPBEN` and `TAMP_SECCFGR`.
+- [ ] After a power-on, `TAMP_BKPR(0)` (hang counts) reads 0. Unplugging the Nucleo clears it (VBAT tied to VDD).
+- [ ] During normal running, `TAMP_BKPR(2)` (breadcrumb) changes between INPUT (4), USB (2) and NONE (0).
+- [ ] Hang in `usb_task()` once: after the reset, the USB nibble of `TAMP_BKPR(0)` is 1 and USB still starts.
+- [ ] Hang in `usb_task()` 3 times in a row: USB stays off (no enumeration on the Pi), `active_fault[USB]` = `FAULT_USB_HANG` (`0x29`), buttons still read, and the chip stops rebooting.
+- [ ] Hang inside `OTG_FS_IRQHandler`: the breadcrumb says USB, not INPUT, and the USB count goes up.
+- [ ] Hang in `input_task()` 3 times: the INPUT count goes up, nothing is disabled, the chip keeps rebooting.
+- [ ] After a hang, 10 s of clean running clears the counts of the enabled subsystems. A disabled USB keeps its count and stays off.
+- [ ] Pressing the reset button (pin reset) or a power cycle with USB disabled: counts back to 0, USB starts again.
 
 ## 9. LEDs and fault display (once #43 and the LED wiring are done)
 
