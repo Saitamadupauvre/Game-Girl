@@ -70,3 +70,17 @@ target_compile_features(gamegirl-usb-task-tests PRIVATE c_std_17)
 gamegirl_enable_warnings(gamegirl-usb-task-tests)
 
 add_test(NAME gamegirl-usb-task-tests COMMAND gamegirl-usb-task-tests)
+
+# backup.c and timer.c are not linked: test_reset_guard.c fakes the registers and the clock
+add_executable(gamegirl-reset-guard-tests
+    test_reset_guard.c
+    ../src/services/reset_guard.c
+    ../src/services/fault.c
+    ../src/common/timer_api.c
+)
+
+target_include_directories(gamegirl-reset-guard-tests PRIVATE ../include)
+target_compile_features(gamegirl-reset-guard-tests PRIVATE c_std_17)
+gamegirl_enable_warnings(gamegirl-reset-guard-tests)
+
+add_test(NAME gamegirl-reset-guard-tests COMMAND gamegirl-reset-guard-tests)
