@@ -1,0 +1,10 @@
+[default_config]
+version = "0.1"
+assembler = "gas"
+instruction_set = "arm"
+
+[default_config.opts]
+compiler = "arm-none-eabi-gcc"
+compile_flags_txt = ["-mcpu=cortex-m33", "-mthumb", "-x", "assembler-with-cpp", "-Imcu/include"]
+diagnostics = true
+default_diagnostics = true
