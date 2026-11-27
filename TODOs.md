@@ -29,11 +29,11 @@ Host tests `gamegirl-input-tests` and `gamegirl-timer-tests` pass.
 
 ## Build infrastructure
 
-- [ ] Add an ARM cross-compilation toolchain file (`cmake/arm-none-eabi-toolchain.cmake`).
-- [ ] Add startup code (vector table, `Reset_Handler`) and a linker script.
-- [ ] Produce ELF, BIN and map files instead of the current object-only `gamegirl-firmware-objects` target. `GAMEGIRL_BUILD_MCU` is `OFF` by default.
+- [x] Add an ARM cross-compilation toolchain file (`cmake/arm-none-eabi-toolchain.cmake`).
+- [x] Add startup code (vector table, `Reset_Handler`) and a linker script.
+- [x] Produce ELF, BIN and map files instead of the current object-only `gamegirl-firmware-objects` target. `GAMEGIRL_BUILD_MCU` is `OFF` by default.
 - [ ] Add OpenOCD `flash`, `reset` and `erase` targets.
-- [ ] Add `.cache/` (clangd) to `.gitignore`.
+- [x] Add `.cache/` (clangd) to `.gitignore`.
 
 ## Docs out of date
 
