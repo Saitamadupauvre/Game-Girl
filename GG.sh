@@ -41,7 +41,7 @@ Usage: ./GG.sh <command>
 
   build   Configure and build host targets (emulator, launcher, tests) in $HOST_BUILD/
   test    Build host targets and run the boardless tests with ctest
-  mcu     Cross-compile the STM32 firmware objects in $MCU_BUILD/
+  mcu     Cross-compile and link the STM32 firmware (.elf, .bin, .map) in $MCU_BUILD/mcu/
   all     test + mcu
   clean   Delete $HOST_BUILD/ and $MCU_BUILD/
 EOF

@@ -9,7 +9,7 @@ include(CTest)
 
 option(GAMEGIRL_BUILD_EMULATOR "Build the host GBA emulator" ON)
 option(GAMEGIRL_BUILD_LAUNCHER "Build the Raspberry Pi launcher" ON)
-option(GAMEGIRL_BUILD_MCU "Build STM32 firmware object files" OFF)
+option(GAMEGIRL_BUILD_MCU "Build the STM32 firmware (ELF, BIN and map)" OFF)
 
 function(gamegirl_enable_warnings target)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
